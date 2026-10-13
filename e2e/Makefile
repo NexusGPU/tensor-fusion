@@ -97,7 +97,7 @@ test-perf-full: build ## tier perf, full design (mainly for the bare-metal host)
 
 # --- tier kwok: Karpenter + TensorFusion on fake nodes, no cloud, no GPU ---------------
 # kind + KWOK + Karpenter (kwok provider) + the chart + a fake hypervisor; see
-# kwok/up.sh and README "KWOK 档". Runs where docker is: here, or on
+# kwok/up.sh and README "KWOK tier". Runs where docker is: here, or on
 # KWOK_SSH_HOST (the checkout is copied there; results are copied back).
 .PHONY: kwok-up
 kwok-up: ## tier kwok: kind cluster with fake GPU nodes (Karpenter KWOK provider) + TensorFusion + fake hypervisor

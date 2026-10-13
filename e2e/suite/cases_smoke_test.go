@@ -36,7 +36,7 @@ var tfCRDs = []string{
 
 var _ = Describe("install", func() {
 	Register(Case{
-		ID: "INS-01", Title: "Helm 安装后控制面就绪", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "INS-01", Title: "Control plane is ready after Helm install", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			By("CRDs are established")
 			for _, plural := range tfCRDs {
@@ -91,7 +91,7 @@ var _ = Describe("install", func() {
 	})
 
 	Register(Case{
-		ID: "INS-02", Title: "默认集群与 Pool 被调谐（零节点）", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "INS-02", Title: "Default cluster and Pool are reconciled (zero nodes)", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			tfc, err := env.get(ctx, gvkTFCluster, "", "tensor-fusion")
 			Expect(err).NotTo(HaveOccurred())
@@ -121,7 +121,7 @@ var _ = Describe("install", func() {
 	})
 
 	Register(Case{
-		ID: "INS-04", Title: "非 GPU 节点不被纳管", Tiers: []string{TierSmoke, TierRehearsal}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "INS-04", Title: "Non-GPU nodes are not managed", Tiers: []string{TierSmoke, TierRehearsal}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			gpuNodes, err := env.list(ctx, gvkGPUNode, "")
 			Expect(err).NotTo(HaveOccurred())
@@ -144,7 +144,7 @@ var _ = Describe("install", func() {
 
 var _ = Describe("webhook", func() {
 	Register(Case{
-		ID: "WHK-01", Title: "只加 label + annotation 即被改写", Tiers: []string{TierSmoke, TierRehearsal}, Needs: []string{NeedTF},
+		ID: "WHK-01", Title: "Adding only the label + annotation is enough for the Pod to be mutated", Tiers: []string{TierSmoke, TierRehearsal}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			pod := tfPod(c.NS, "frac", ann("isolation", "soft", "compute-percent-request", "20", "compute-percent-limit", "40", "vram-request", "1Gi", "vram-limit", "2Gi"), noProvision())
 			Expect(env.create(ctx, pod)).To(Succeed())
@@ -199,7 +199,7 @@ var _ = Describe("webhook", func() {
 	})
 
 	Register(Case{
-		ID: "WHK-02", Title: "引用 WorkloadProfile，annotation 可覆盖", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "WHK-02", Title: "Referencing a WorkloadProfile; annotations can override it", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			profile := parseYAML(fmt.Sprintf(`
 apiVersion: tensor-fusion.ai/v1
@@ -231,7 +231,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "WHK-03", Title: "多容器 Pod 只注入指定容器", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "WHK-03", Title: "In a multi-container Pod only the specified container is injected", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			By("two containers without inject-container are rejected")
 			err := env.create(ctx, tfPod(c.NS, "ambiguous", ann("compute-percent-request", "10", "vram-request", "1Gi"),
@@ -256,7 +256,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "WHK-05", Title: "enabled-replicas 只接入部分副本", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "WHK-05", Title: "enabled-replicas onboards only some of the replicas", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		KnownIssue: "intermittent: the webhook's per-workload pod counter is not atomic across the concurrent pod creations of one ReplicaSet; with 4 replicas and enabled-replicas=2, 3 pods were handed to TensorFusion in 1 of 3 runs (2.17.23)",
 		Run: func(ctx SpecContext, c *C) {
 			tmpl := tfPod(c.NS, "gray", ann("enabled-replicas", "2", "compute-percent-request", "10", "vram-request", "1Gi"))
@@ -279,7 +279,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "WHK-06", Title: "未启用的 Pod 完全不被改动", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "WHK-06", Title: "A Pod that is not enabled is not modified at all", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			// Annotations alone must not opt a pod in: the label is the gate.
 			pod := plainPod(c.NS, "plain", noProvision())
@@ -295,7 +295,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "WHK-08", Title: "server-side dry-run 不产生副作用", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "WHK-08", Title: "server-side dry-run has no side effects", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		KnownIssue: "webhook declares sideEffects: None but creates the TensorFusionWorkload even for dry-run requests (<= 2.17.23)",
 		Run: func(ctx SpecContext, c *C) {
 			Expect(env.dryRun(ctx, tfPod(c.NS, "dry", ann("compute-percent-request", "10", "vram-request", "1Gi"), noProvision()))).To(Succeed())
@@ -307,7 +307,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "WHK-07", Title: "删除负载后 TensorFusionWorkload 与 GPU 资源归还", Tiers: []string{TierSmoke, TierCore, TierRehearsal}, Needs: []string{NeedTF},
+		ID: "WHK-07", Title: "After the workload is deleted, the TensorFusionWorkload and the GPU resources are returned", Tiers: []string{TierSmoke, TierCore, TierRehearsal}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			opts := []PodOpt{}
 			if env.Mode == ModeNoGPU {
@@ -356,13 +356,13 @@ var _ = Describe("negative", func() {
 			},
 		})
 	}
-	rejected("NEG-02", "指定不存在的 pool 在准入被拒", "gpu pool", ann("gpupool", "does-not-exist", "vram-request", "1Gi", "compute-percent-request", "10"))
-	rejected("NEG-05", "整卡请求缺 gpu-model 被拒", "dedicated GPU requires gpu-model", ann("dedicated-gpu", "true"))
-	rejected("NEG-06", "gang-min-members=1 被拒", "gang", ann("gang-enabled", "true", "gang-min-members", "1", "vram-request", "1Gi", "compute-percent-request", "10"))
-	rejected("NEG-12", "soft 模式未写任何资源请求被拒", "request is not set", ann("isolation", "soft"))
+	rejected("NEG-02", "Specifying a pool that does not exist is rejected at admission", "gpu pool", ann("gpupool", "does-not-exist", "vram-request", "1Gi", "compute-percent-request", "10"))
+	rejected("NEG-05", "A whole-GPU request without gpu-model is rejected", "dedicated GPU requires gpu-model", ann("dedicated-gpu", "true"))
+	rejected("NEG-06", "gang-min-members=1 is rejected", "gang", ann("gang-enabled", "true", "gang-min-members", "1", "vram-request", "1Gi", "compute-percent-request", "10"))
+	rejected("NEG-12", "soft mode without any resource request is rejected", "request is not set", ann("isolation", "soft"))
 
 	Register(Case{
-		ID: "NEG-03", Title: "本地 hard 不写 sidecar-worker：实际被接受并自动加 sidecar", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "NEG-03", Title: "Local hard without sidecar-worker: actually accepted, and the sidecar is added automatically", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			// e2e/README (earlier draft) and tf_parser.go:222 say this combination is
 			// rejected. The check is unreachable: local hard always gets a sidecar
@@ -379,7 +379,7 @@ var _ = Describe("negative", func() {
 	})
 
 	Register(Case{
-		ID: "NEG-11", Title: "tflops 与 compute-percent 同时指定：实际被接受，tflops 生效", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "NEG-11", Title: "tflops and compute-percent specified together: actually accepted, tflops takes effect", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			// tf_parser.go has a "mutually exclusive" rejection, but the annotation
 			// parser drops compute-percent-* as soon as a tflops-* annotation is
@@ -396,7 +396,7 @@ var _ = Describe("negative", func() {
 	})
 
 	Register(Case{
-		ID: "NEG-04", Title: "partitioned 不带 partition-id 被拒", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "NEG-04", Title: "partitioned without partition-id is rejected", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			err := env.create(ctx, tfPod(c.NS, "mig", ann("isolation", "partitioned"), noProvision()))
 			Expect(err).To(HaveOccurred(), "a partitioned pod without a partition template was admitted")
@@ -405,7 +405,7 @@ var _ = Describe("negative", func() {
 	})
 
 	Register(Case{
-		ID: "NEG-13", Title: "非法 isolation / qos 值的报错位置", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "NEG-13", Title: "Where the error is reported for invalid isolation / qos values", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			// The webhook does not validate these enums itself; the pod is refused only
 			// because creating the TensorFusionWorkload fails CRD validation
@@ -421,7 +421,7 @@ var _ = Describe("negative", func() {
 
 var _ = Describe("scheduling without GPUs", func() {
 	Register(Case{
-		ID: "SCH-10", Title: "命名空间配额拦截超限请求", Tiers: []string{TierSmoke, TierCore, TierRehearsal}, Needs: []string{NeedTF}, Timeout: 6 * time.Minute,
+		ID: "SCH-10", Title: "The namespace quota blocks requests over the limit", Tiers: []string{TierSmoke, TierCore, TierRehearsal}, Needs: []string{NeedTF}, Timeout: 6 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			quota := parseYAML(fmt.Sprintf(`
 apiVersion: tensor-fusion.ai/v1
@@ -469,7 +469,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "SCH-12", Title: "分配查询与扩容器状态 API 可用", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "SCH-12", Title: "The allocation query and expander status APIs are available", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			for _, path := range []string{"api/allocation", "api/node-scaler"} {
 				body, err := env.controllerAPI(ctx, path, nil)
@@ -480,7 +480,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "SCH-14", Title: "自动分配 HostPort", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
+		ID: "SCH-14", Title: "HostPort is assigned automatically", Tiers: []string{TierSmoke}, Needs: []string{NeedTF},
 		Run: func(ctx SpecContext, c *C) {
 			pod := tfPod(c.NS, "port", ann("compute-percent-request", "10", "vram-request", "1Gi"),
 				withLabels(map[string]string{tfDomain + "/host-port": "auto", tfDomain + "/port-name": "http"}), noProvision(),
@@ -504,7 +504,7 @@ spec:
 
 var _ = Describe("observability without GPUs", func() {
 	Register(Case{
-		ID: "OBS-01", Title: "Operator metrics 端点可抓取", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "OBS-01", Title: "The operator metrics endpoint can be scraped", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			pods, err := env.list(ctx, gvkPod, env.TFNamespace, client.MatchingLabels{lblComponent: "operator"})
 			Expect(err).NotTo(HaveOccurred())
@@ -522,7 +522,7 @@ var _ = Describe("observability without GPUs", func() {
 	})
 
 	Register(Case{
-		ID: "OBS-06", Title: "GreptimeDB 可通过 HTTP SQL 查询", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "OBS-06", Title: "GreptimeDB can be queried over HTTP SQL", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			rows, err := env.greptimeSQL(ctx, "SHOW TABLES")
 			Expect(err).NotTo(HaveOccurred(), "GreptimeDB HTTP SQL API")

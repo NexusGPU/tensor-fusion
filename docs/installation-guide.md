@@ -1,21 +1,21 @@
-# TensorFusion Kubernetes 安装说明
+# TensorFusion Kubernetes Installation Guide
 
-本文档说明如何在 Kubernetes 集群中安装 TensorFusion 控制面，并完成最小业务 Pod 验证。
+This document explains how to install the TensorFusion control plane in a Kubernetes cluster and complete a minimal workload Pod verification.
 
-TensorFusion 官方镜像发布在 [Docker Hub](https://hub.docker.com/u/tensorfusion)。需要使用最新
-版本时，可在该页面确认 operator、hypervisor、client 和 worker 的可用 tag，再覆盖 Helm
-values 或 TensorFusionCluster/ProviderConfig 中的镜像字段。
+The official TensorFusion images are published on [Docker Hub](https://hub.docker.com/u/tensorfusion). To use the latest
+version, check the available tags of the operator, hypervisor, client, and worker on that page, then override the image
+fields in the Helm values or in TensorFusionCluster/ProviderConfig.
 
-适用假设：
+Assumptions:
 
-- 使用本仓库 Helm chart 安装，chart 路径为 `charts/tensor-fusion`。
-- Helm release 名称使用 `tensor-fusion-sys`，系统命名空间使用 `tensor-fusion-sys`。
-- GPU 功能验证时，集群已有 GPU 节点，节点能被 `nvidia.com/gpu.present=true` 这类 label 选中。无 GPU 的控制面安装验证不要求此条件。
-- 执行安装的账号具备创建 CRD、ClusterRole、MutatingWebhookConfiguration、ValidatingWebhookConfiguration、Namespace 的权限。
+- The installation uses the Helm chart in this repository; the chart path is `charts/tensor-fusion`.
+- The Helm release name is `tensor-fusion-sys` and the system namespace is `tensor-fusion-sys`.
+- For GPU functional verification, the cluster already has GPU nodes, and the nodes can be selected by a label such as `nvidia.com/gpu.present=true`. Verifying a control plane installation without GPUs does not require this.
+- The account that runs the installation has permission to create CRDs, ClusterRoles, MutatingWebhookConfigurations, ValidatingWebhookConfigurations, and Namespaces.
 
-## 1. 前置条件
+## 1. Prerequisites
 
-安装前确认基础工具和集群状态：
+Before installing, confirm the basic tools and the cluster state:
 
 ```bash
 kubectl version --client=true
@@ -24,33 +24,33 @@ kubectl get nodes -o wide
 kubectl get nodes --show-labels | grep -E 'nvidia.com/gpu.present=true|gpu.present=true'
 ```
 
-GPU 节点需要满足：
+GPU nodes must meet the following:
 
-- NVIDIA 驱动正常。
-- 容器运行时能挂载 GPU 设备。
-- GPU 节点带有 TensorFusion 可识别的 label。默认 Helm 参数 `initialGpuNodeLabelSelector` 是 `nvidia.com/gpu.present=true`。
-- 如果使用 remote 模式，client Pod 到 worker Pod 所在节点的网络需要可达。
+- The NVIDIA driver works correctly.
+- The container runtime can mount GPU devices.
+- GPU nodes carry a label that TensorFusion can recognise. The default Helm parameter `initialGpuNodeLabelSelector` is `nvidia.com/gpu.present=true`.
+- If remote mode is used, the network from the client Pod to the node where the worker Pod runs must be reachable.
 
-## 2. 安装控制面
+## 2. Install the control plane
 
-### 2.1 默认安装
+### 2.1 Default installation
 
-默认 values 会安装：
+The default values install:
 
-- TensorFusion CRD、RBAC、controller。
-- Mutating admission webhook。
-- Validating admission webhook（`<release>-validating-webhook`），只处理 `pods/ephemeralcontainers` 的更新，见 2.5。
-- TensorFusion scheduler 配置。
-- NVIDIA ProviderConfig、SchedulingConfigTemplate，以及默认的 NVIDIA TensorFusionCluster/GPUPool。
-- GreptimeDB standalone。
-- Alertmanager。
-- vector sidecar（镜像固定为 `timberio/vector:0.56.0-alpine`）。controller Pod 始终带有 vector sidecar；每个 hypervisor Pod 默认也带一个（`cluster.enableVector`，见 2.5）。cluster-agent 默认关闭，仅在显式配置 `agent.agentId` 后启用。
+- TensorFusion CRDs, RBAC, and the controller.
+- Mutating admission webhook.
+- Validating admission webhook (`<release>-validating-webhook`), which only handles updates of `pods/ephemeralcontainers`, see 2.5.
+- TensorFusion scheduler configuration.
+- The NVIDIA ProviderConfig, the SchedulingConfigTemplate, and the default NVIDIA TensorFusionCluster/GPUPool.
+- GreptimeDB standalone.
+- Alertmanager.
+- vector sidecar (the image is pinned to `timberio/vector:0.56.0-alpine`). The controller Pod always has a vector sidecar; each hypervisor Pod also has one by default (`cluster.enableVector`, see 2.5). cluster-agent is disabled by default and is enabled only after `agent.agentId` is explicitly configured.
 
-无 GPU 的集群也可以安装控制面。只要没有节点命中
-`initialGpuNodeLabelSelector`，operator 就不会创建 GPUNode 或 Hypervisor Pod；此时只验证
-controller、CRD、RBAC、webhook 和默认 CR 是否正确即可。
+The control plane can also be installed in a cluster without GPUs. As long as no node matches
+`initialGpuNodeLabelSelector`, the operator does not create GPUNodes or Hypervisor Pods; in that case only verify that the
+controller, CRDs, RBAC, webhook, and default CRs are correct.
 
-从仓库根目录执行：
+Run from the repository root:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -58,7 +58,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --create-namespace
 ```
 
-如果集群拉取海外镜像不稳定，使用国内镜像 values：
+If the cluster cannot pull overseas images reliably, use the values for registries in mainland China:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -67,13 +67,13 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -f charts/tensor-fusion/values-cn.yaml
 ```
 
-### 2.2 生产环境安装
+### 2.2 Production installation
 
-生产环境建议使用外部高可用 GreptimeDB，而不是 chart 内置 standalone。
+For production, an external highly available GreptimeDB is recommended instead of the standalone instance built into the chart.
 
-`charts/tensor-fusion/values-production.yaml` 只会设置 `greptime.installStandalone=false`，不会自动填充外部 GreptimeDB 地址和凭据。需要额外传入 `greptime.host`、`greptime.port`、`greptime.db`，如果使用云 Greptime，还要设置 `greptime.isCloud=true`、`greptime.user`、`greptime.password`。
+`charts/tensor-fusion/values-production.yaml` only sets `greptime.installStandalone=false`; it does not fill in the external GreptimeDB address and credentials automatically. You need to pass `greptime.host`, `greptime.port`, and `greptime.db` in addition, and if you use cloud Greptime, also set `greptime.isCloud=true`, `greptime.user`, and `greptime.password`.
 
-示例：
+Example:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -89,38 +89,38 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --set greptime.password='<greptime-password>'
 ```
 
-如果外部 Greptime 不需要账号密码，则保持 `greptime.isCloud=false`，并设置可访问的 host、port、db。
+If the external Greptime needs no username and password, keep `greptime.isCloud=false` and set a reachable host, port, and db.
 
-### 2.3 常用 Helm 参数
+### 2.3 Common Helm parameters
 
-| 参数 | 说明 | 默认值 |
+| Parameter | Description | Default |
 | --- | --- | --- |
-| `initialGpuNodeLabelSelector` | controller 初始扫描 GPU 节点的 label selector | `nvidia.com/gpu.present=true` |
-| `controller.image.repository` | operator 镜像仓库 | `tensorfusion/tensor-fusion-operator` |
-| `controller.image.tag` | operator 镜像 tag；空值时使用 Chart `appVersion` | `""`（当前解析为 `2.17.3`） |
-| `controller.replicaCount` | controller 副本数 | `1` |
-| `controller.compatibleWithNvidiaContainerToolkit` | 启用 NVIDIA Container Toolkit 校验及驱动库兼容挂载 | `false` |
-| `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
+| `initialGpuNodeLabelSelector` | Label selector the controller uses for its initial scan of GPU nodes | `nvidia.com/gpu.present=true` |
+| `controller.image.repository` | operator image repository | `tensorfusion/tensor-fusion-operator` |
+| `controller.image.tag` | operator image tag; when empty, the Chart `appVersion` is used | `""` (see `appVersion` in `charts/tensor-fusion/Chart.yaml`) |
+| `controller.replicaCount` | Number of controller replicas | `1` |
+| `controller.compatibleWithNvidiaContainerToolkit` | Enables the NVIDIA Container Toolkit check and the compatibility mounts for driver libraries | `false` |
+| `greptime.installStandalone` | Whether to install the built-in GreptimeDB standalone | `true` |
 | `greptime.host` | GreptimeDB MySQL endpoint host | `greptimedb-standalone.greptimedb.svc.cluster.local` |
-| `alert.enabled` | 是否安装 alertmanager | `true` |
-| `controller.admissionWebhooks.failurePolicy` | webhook 失败策略 | `Fail` |
+| `alert.enabled` | Whether to install alertmanager | `true` |
+| `controller.admissionWebhooks.failurePolicy` | webhook failure policy | `Fail` |
 
-安装了 NVIDIA GPU Operator，且 GPU 节点提供
-`/run/nvidia/validations/toolkit-ready` 和 `driver-ready` 时，可设置：
+When the NVIDIA GPU Operator is installed and the GPU nodes provide
+`/run/nvidia/validations/toolkit-ready` and `driver-ready`, you can set:
 
 ```bash
 --set controller.compatibleWithNvidiaContainerToolkit=true
 ```
 
-这会启用 Toolkit 就绪检查和非标准驱动目录发现。没有这些 validation 文件的集群应保持默认
-`false`。如需覆盖自动发现，可通过 `ProviderConfig.spec.hypervisor.extraEnv` 显式设置
-`TF_CUDA_LIB_PATH` 和 `TF_NVML_LIB_PATH`。
+This enables the Toolkit readiness check and the discovery of non-standard driver directories. Clusters without these validation files should keep the default
+`false`. To override the automatic discovery, set `TF_CUDA_LIB_PATH` and `TF_NVML_LIB_PATH` explicitly through
+`ProviderConfig.spec.hypervisor.extraEnv`.
 
-### 2.4 指定组件版本
+### 2.4 Specifying component versions
 
-Chart 1.8.3 起默认固定与 Chart `appVersion`（当前为 `2.17.3`）配套的组件版本，一键安装不再依赖
-operator / hypervisor / vgpu-provider / client / worker 的浮动 `latest`。需要使用私有仓库或
-其它已验证版本时，可通过 `--set` 覆盖：
+Starting with Chart 1.8.3, the defaults pin the component versions that match the Chart `appVersion` (currently `2.17.3`), so a one-command installation no longer depends on
+the floating `latest` of the operator / hypervisor / vgpu-provider / client / worker. To use a private registry or
+another verified version, override them with `--set`:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -132,19 +132,19 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.25.0
 ```
 
-各组件对应的 values 键：
+The values keys for each component:
 
-| 组件 | values 键 | 说明 |
+| Component | values key | Description |
 | --- | --- | --- |
-| operator | `controller.image.repository` + `controller.image.tag` | 仓库与 tag 分开两个键 |
-| hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag）；空值时使用 `tensorfusion/tensor-fusion-hypervisor:<appVersion>`，与 operator 同版本 |
-| vgpu-provider | `providerConfigs.nvidia.images.middleware` | 默认 `tensorfusion/vgpu-provider-nvidia:1.3.9` |
-| client | `providerConfigs.nvidia.images.remoteClient` | 默认 `tensorfusion/tensor-fusion-client:v2.25.0` |
-| worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `tensorfusion/tensor-fusion-worker:v2.25.0` |
+| operator | `controller.image.repository` + `controller.image.tag` | Repository and tag are two separate keys |
+| hypervisor | `cluster.hypervisorImage` | **Full image** (repository + tag); when empty, `tensorfusion/tensor-fusion-hypervisor:<appVersion>` is used, the same version as the operator |
+| vgpu-provider | `providerConfigs.nvidia.images.middleware` | Default `tensorfusion/vgpu-provider-nvidia:1.3.9` |
+| client | `providerConfigs.nvidia.images.remoteClient` | Default `tensorfusion/tensor-fusion-client:v2.25.0` |
+| worker | `providerConfigs.nvidia.images.remoteWorker` | Default `tensorfusion/tensor-fusion-worker:v2.25.0` |
 
-> 注意：`cluster.hypervisorImage` 传的是完整镜像引用（`仓库:tag`），而 operator 用 `repository` + `tag` 两个独立键。
+> Note: `cluster.hypervisorImage` takes a full image reference (`repository:tag`), whereas the operator uses the two separate keys `repository` + `tag`.
 
-若通过 Helm 仓库（而非本地 chart 路径）安装，可用 `--version` 固定 **chart 版本**（与镜像 tag 相互独立）：
+When installing from the Helm repository (rather than a local chart path), `--version` can pin the **chart version** (which is independent of the image tags):
 
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
@@ -153,11 +153,11 @@ helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1
   -n tensor-fusion-sys --create-namespace
 ```
 
-### 2.5 本版本新增的安装行为
+### 2.5 Installation behaviour added in this version
 
-**临时容器的准入校验。** chart 新增一个 `ValidatingWebhookConfiguration`，只匹配 `pods/ephemeralcontainers` 的 `UPDATE`，不带 namespace 或 label 选择器。handler 只对挂了 TensorFusion 节点数据卷（`/run/tensor-fusion` 下的 hostPath）的 Pod 生效：临时容器不能以注入方式之外的形式挂载该卷，也不能自行定义 `TF_SHM_POD_NAMESPACE`、`TF_SHM_POD_NAME`；其他 Pod 和普通的 `kubectl debug` 容器直接放行。失败策略由 `controller.admissionWebhooks.ephemeralContainers.failurePolicy` 控制，默认 `Ignore`（超时 3 秒），operator 不可用时不会阻塞集群内的 `kubectl debug`；对隔离要求高的集群可以设为 `Fail`。集群自身的 Pod 安全策略仍由管理员负责，见 `docs/pod-security.zh.md`。
+**Admission validation of ephemeral containers.** The chart adds a `ValidatingWebhookConfiguration` that matches only `UPDATE` of `pods/ephemeralcontainers`, with no namespace or label selector. The handler takes effect only for Pods that mount the TensorFusion node data volume (a hostPath under `/run/tensor-fusion`): an ephemeral container may not mount this volume in any form other than the injected one, and may not define `TF_SHM_POD_NAMESPACE` or `TF_SHM_POD_NAME` itself; other Pods and ordinary `kubectl debug` containers are admitted directly. The failure policy is controlled by `controller.admissionWebhooks.ephemeralContainers.failurePolicy` and defaults to `Ignore` (timeout 3 seconds), so `kubectl debug` in the cluster is not blocked when the operator is unavailable; clusters with strict isolation requirements can set it to `Fail`. The cluster's own Pod security policy remains the administrator's responsibility, see `docs/pod-security.md`.
 
-**cluster-agent 的凭据。** `agent.enrollToken` 与 `agent.agentId` 不再出现在 Pod spec 中：chart 把它们写入 Secret `<release>-agent`，sidecar 通过 `secretKeyRef` 读取。原有的安装命令（`--set agent.agentId=... --set agent.enrollToken=...`，以及 `helm upgrade --reuse-values`）不需要修改。如果希望自己管理 Secret，改用：
+**Credentials of cluster-agent.** `agent.enrollToken` and `agent.agentId` no longer appear in the Pod spec: the chart writes them into the Secret `<release>-agent`, and the sidecar reads them through `secretKeyRef`. Existing install commands (`--set agent.agentId=... --set agent.enrollToken=...`, and `helm upgrade --reuse-values`) need no change. If you want to manage the Secret yourself, use this instead:
 
 ```bash
 kubectl -n tensor-fusion-sys create secret generic my-agent \
@@ -170,9 +170,9 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --set agent.existingSecret.key=enroll-token
 ```
 
-`agent.existingSecret.agentIdKey` 可选：设置后 agent id 也从该 Secret 读取，`agent.agentId` 可以留空。chart 管理的 Secret 变化时，controller Pod 会随 `checksum/agent-secret` 注解自动重启；自管 Secret 轮换后需要手动重启 controller Pod。Alertmanager 配置同样改为保存在 Secret 中；使用 GreptimeDB Cloud 时，数据库密码只存在于 Secret `<release>-greptimedb-secret`，vector 配置通过环境变量 `GREPTIME_PASSWORD` 引用它。
+`agent.existingSecret.agentIdKey` is optional: when it is set, the agent id is also read from that Secret and `agent.agentId` can be left empty. When the chart-managed Secret changes, the controller Pod restarts automatically along with the `checksum/agent-secret` annotation; after rotating a self-managed Secret the controller Pod must be restarted manually. The Alertmanager configuration is likewise now stored in a Secret; with GreptimeDB Cloud, the database password exists only in the Secret `<release>-greptimedb-secret`, and the vector configuration references it through the environment variable `GREPTIME_PASSWORD`.
 
-**vector sidecar 默认开启。** hypervisor Pod 中的 vector 把 `tf_gpu_usage`、`tf_worker_usage` 和日志写入 GreptimeDB，每个 GPU 节点请求 50m CPU / 64Mi 内存，上限 1 CPU / 512Mi；hypervisor 的指标文件最多占用约 1.1 GB 临时存储。GPU 是否可用只取决于 hypervisor 容器，vector 异常不会让 GPU 退出调度。关闭方式：
+**The vector sidecar is enabled by default.** vector in the hypervisor Pod writes `tf_gpu_usage`, `tf_worker_usage`, and logs to GreptimeDB; on each GPU node it requests 50m CPU / 64Mi memory with limits of 1 CPU / 512Mi, and the hypervisor's metrics file occupies at most about 1.1 GB of ephemeral storage. Whether a GPU is available depends only on the hypervisor container; a vector failure does not take the GPU out of scheduling. To disable it:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -180,17 +180,17 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --set cluster.enableVector=false
 ```
 
-关闭后这两张用量表不再有数据，依赖它们的告警规则和 autoscaler 也随之失效。开启、关闭或升级到本版本都会改变 hypervisor Pod 模板，每个 hypervisor Pod 会被重建一次；业务 Pod 不会重启。
+After it is disabled, these two usage tables no longer receive data, and the alert rules and the autoscaler that depend on them stop working as well. Enabling it, disabling it, or upgrading to this version all change the hypervisor Pod template, and each hypervisor Pod is recreated once; workload Pods are not restarted.
 
-**升级注意事项。** 升级前已经因为缺少 vector ConfigMap 而卡在 ContainerCreating 的 hypervisor Pod 不会被自动替换（该卷改为可选后不计入模板 hash，以免所有 hypervisor 重启），需要手动删除一次。升级顺序是先 hypervisor、后业务 Pod 内的 limiter 库；在两者版本不一致的窗口内，单次 launch 成本超过令牌桶的旧版 limiter Pod 不受限额约束，直到 Pod 重启。已知限制：单次持续数十秒的 launch 在新版 limiter 下会低于其配额运行（不会超出限额）；autoscaler 对从未上报过算力用量的 worker 不会下调算力。
+**Upgrade notes.** hypervisor Pods that were already stuck in ContainerCreating before the upgrade because the vector ConfigMap was missing are not replaced automatically (after the volume was made optional it is not included in the template hash, to avoid restarting every hypervisor), and must be deleted manually once. The upgrade order is the hypervisor first, then the limiter library inside the workload Pods; during the window in which the two versions differ, an old-version limiter Pod whose single launch cost exceeds the token bucket is not constrained by its limit until the Pod restarts. Known limitations: a single launch that lasts tens of seconds runs below its quota under the new limiter (it does not exceed the limit); the autoscaler does not scale compute down for a worker that has never reported compute usage.
 
-**算力突发窗口。** soft 隔离下，空闲的业务 Pod 可以攒下一段按自身配额速率计的令牌，恢复运行时全速用掉，之后回到配额。攒多少由突发窗口 W（秒）决定，默认 0.1 s，范围 0 到 10 s。池级在 `schedulingConfigTemplate.elasticRateLimitParameters.burstWindow` 设置（字符串，例如 `"0.5"`；只设这一项即可，其余参数留空；hypervisor 在启动时读取该值，修改后已在运行的 hypervisor Pod 不会自动重建，需要删除它们才生效）；单个工作负载用 Pod 注解 `tensor-fusion.ai/compute-burst-window`（Go duration，例如 `500ms`、`2s`），可以在运行中的 Pod 上直接修改，不需要重启，超过 10 s、为负或格式错误的值在创建 Pod 时被拒绝。长期算力配额不受 W 影响：配额为 s 的 Pod 攒满后在空闲设备上最多全速运行约 `s × W / (1 − s)` 秒（W = 2 s 时，25% 配额约 0.67 s，50% 配额约 2 s），同一张卡上其他 Pod 只在这段时间内受到影响。
+**Compute burst window.** Under soft isolation, an idle workload Pod can accumulate a stretch of tokens measured at its own quota rate, spend them at full speed when it resumes, and then return to its quota. How much it accumulates is determined by the burst window W (seconds), which defaults to 0.1 s and ranges from 0 to 10 s. At the pool level it is set in `schedulingConfigTemplate.elasticRateLimitParameters.burstWindow` (a string, for example `"0.5"`; setting this one item is enough and the other parameters can be left empty; the hypervisor reads the value at startup, so hypervisor Pods that are already running are not recreated automatically after a change and must be deleted for it to take effect); for a single workload use the Pod annotation `tensor-fusion.ai/compute-burst-window` (Go duration, for example `500ms` or `2s`), which can be changed directly on a running Pod without a restart; values that exceed 10 s, are negative, or are malformed are rejected when the Pod is created. The long-term compute quota is not affected by W: once its bucket is full, a Pod with quota s runs at full speed on an idle device for at most about `s × W / (1 − s)` seconds (with W = 2 s: about 0.67 s at a 25% quota, about 2 s at a 50% quota), and other Pods on the same GPU are affected only during that time.
 
-**指标表的时间列。** `tf_*` 表的时间索引列是 `greptime_timestamp`（由行协议写入时自动建表产生），不是 `ts`。chart 自带的告警规则只使用 `{{ .Conditions }}`，不需要修改；自己编写的告警规则如果直接写了 `ts`，需要改用模板变量 `{{ .TimeColumn }}`（或 `{{ timeColumn "表名" }}`），operator 会按表检测实际的列名，旧集群上名为 `ts` 的表也能继续使用。
+**Time column of the metric tables.** The time index column of the `tf_*` tables is `greptime_timestamp` (produced when the table is created automatically on a line protocol write), not `ts`. The alert rules shipped with the chart use only `{{ .Conditions }}` and need no change; alert rules you wrote yourself that use `ts` directly must switch to the template variable `{{ .TimeColumn }}` (or `{{ timeColumn "table name" }}`); the operator detects the actual column name per table, so tables whose column is named `ts` on old clusters keep working.
 
-## 3. 验证控制面
+## 3. Verify the control plane
 
-安装后检查系统组件：
+After installation, check the system components:
 
 ```bash
 kubectl get pods -n tensor-fusion-sys -o wide
@@ -199,42 +199,42 @@ kubectl get crd | grep tensor-fusion.ai
 kubectl get mutatingwebhookconfiguration | grep tensor-fusion
 ```
 
-检查 controller 日志：
+Check the controller logs:
 
 ```bash
 kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c controller --tail=100
 ```
 
-正常情况下，controller Pod 至少包含 `controller` 和 `vector` 容器；如果 values 中配置了 `agent.agentId`，还会有 `cluster-agent`。
+Normally the controller Pod contains at least the `controller` and `vector` containers; if `agent.agentId` is configured in the values, there is also `cluster-agent`.
 
-无 GPU 环境还应确认没有误建 Hypervisor：
+In an environment without GPUs, also confirm that no Hypervisor was created by mistake:
 
 ```bash
 kubectl get pods -n tensor-fusion-sys -o json \
   | jq '[.items[] | select(any(.spec.containers[]?; .name == "tensor-fusion-hypervisor"))] | length'
 ```
 
-没有节点命中 GPU selector 时，输出必须为 `0`。默认 TFC/GPUPool 因没有 GPUNode 可能保持
-`Updating`，不影响 controller-only 安装验收。
+When no node matches the GPU selector, the output must be `0`. The default TFC/GPUPool may stay in
+`Updating` because there is no GPUNode; this does not affect acceptance of a controller-only installation.
 
-## 4. 创建 TensorFusionCluster 和 GPUPool
+## 4. Create the TensorFusionCluster and GPUPool
 
-控制面安装完成后，需要创建 TensorFusionCluster 或 GPUPool，TensorFusion 才能发现和管理 GPU 资源。
+After the control plane is installed, a TensorFusionCluster or GPUPool must be created before TensorFusion can discover and manage GPU resources.
 
-> 从 v1.7.8 起，默认 Helm 安装（`cluster.enabled=true`）会自动创建一个 NVIDIA
-> `TensorFusionCluster`（单 NVIDIA pool）。**纯 NVIDIA 集群开箱即用，无需手动创建**；
-> 其它厂家或多卡场景见下面 4.1 / 4.2。
+> Since v1.7.8, the default Helm installation (`cluster.enabled=true`) automatically creates an NVIDIA
+> `TensorFusionCluster` (a single NVIDIA pool). **NVIDIA-only clusters work out of the box with no manual creation**;
+> for other vendors or multi-GPU-type scenarios see 4.1 / 4.2 below.
 
-`config/samples/` 下提供了各厂家真实可用的样例（ProviderConfig + TensorFusionCluster），
-`componentConfig` 已是与当前版本匹配的完整配置，可直接 apply。
+`config/samples/` provides working samples for each vendor (ProviderConfig + TensorFusionCluster);
+their `componentConfig` is already a complete configuration matching the current version and can be applied directly.
 
-小贴士：
+Tips:
 
-- 使用 TensorFusionCluster 创建 pool 时，实际 GPUPool 名称通常是 `<cluster-name>-<pool-name>`。
-- 业务 Pod 不显式写 `tensor-fusion.ai/gpupool` 时，会落到 `isDefault: true` 的 pool。
+- When a pool is created through a TensorFusionCluster, the actual GPUPool name is usually `<cluster-name>-<pool-name>`.
+- A workload Pod that does not explicitly set `tensor-fusion.ai/gpupool` lands in the pool with `isDefault: true`.
 
-**节点切分/隔离能力**通过 GPUPool 的 `nodeManagerConfig` 统一配置。未命中规则的节点
-使用 `defaultIsolationMode`；规则按顺序匹配，第一条命中后停止：
+**Node partitioning/isolation capability** is configured in one place through the GPUPool's `nodeManagerConfig`. Nodes that match no rule
+use `defaultIsolationMode`; rules are matched in order and matching stops at the first hit:
 
 ```yaml
 nodeManagerConfig:
@@ -252,35 +252,35 @@ nodeManagerConfig:
           tensor-fusion.ai/gpu-model: H100
 ```
 
-修改默认模式或 selector 规则会进入 GPUPool 现有的 Hypervisor 滚动更新流程。
-`autoUpdateHypervisor=false` 时只标记配置未同步；启用后按 `batchPercentage` 和
-`batchInterval` 分批更新，并且只重建有效模式发生变化的节点。
+Changing the default mode or the selector rules goes through the GPUPool's existing Hypervisor rolling update process.
+With `autoUpdateHypervisor=false` the configuration is only marked as out of sync; when it is enabled, updates run in batches according to `batchPercentage` and
+`batchInterval`, and only nodes whose effective mode changed are recreated.
 
-soft、hard、partitioned 是互斥的节点能力。`shared` 从 v2.13.0 起表示整卡分配策略，
-不是必须单独规划的第四种节点能力：shared workload 可以使用上述任一模式节点上的完整
-空闲、未分区 GPU。节点的有效模式完全由 GPUPool 策略决定。
+soft, hard, and partitioned are mutually exclusive node capabilities. Since v2.13.0 `shared` denotes a whole-GPU allocation policy,
+not a fourth node capability that has to be planned separately: a shared workload can use a complete,
+idle, unpartitioned GPU on a node of any of the modes above. The effective mode of a node is determined entirely by the GPUPool policy.
 
-### 4.1 按厂家安装（单一厂家）
+### 4.1 Install by vendor (single vendor)
 
-| 厂家 | 命令 |
+| Vendor | Command |
 | --- | --- |
-| NVIDIA | 默认已创建；或 `kubectl apply -f config/samples/provider-nvidia.yaml -f config/samples/tensorfusioncluster-nvidia.yaml` |
+| NVIDIA | Created by default; or `kubectl apply -f config/samples/provider-nvidia.yaml -f config/samples/tensorfusioncluster-nvidia.yaml` |
 | Ascend | `kubectl apply -f config/samples/provider-ascend.yaml -f config/samples/tensorfusioncluster-ascend.yaml` |
 | MooreThreads | `kubectl apply -f config/samples/provider-mthreads.yaml -f config/samples/tensorfusioncluster-mthreads.yaml` |
 | PPU | `kubectl apply -f config/samples/provider-ppu.yaml -f config/samples/tensorfusioncluster-ppu.yaml` |
 
-非 NVIDIA 集群安装控制面时，建议关掉默认 NVIDIA cluster，避免多出一个无节点的 pool：
+When installing the control plane on a non-NVIDIA cluster, it is recommended to turn off the default NVIDIA cluster to avoid an extra pool with no nodes:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
   --set cluster.enabled=false --set providerConfigs.nvidia.enabled=false
-# 再 apply 对应厂家的 provider + tensorfusioncluster
+# then apply the provider + tensorfusioncluster of the corresponding vendor
 ```
 
-**在线安装（Helm 仓库，无需 clone 仓库）**：把 `./charts/tensor-fusion` 换成
-`tensor-fusion/tensor-fusion --version <chart 版本>`；样例 CR 不打包进 chart，用仓库
-raw URL apply（或先 clone 仓库）。以 Ascend 为例：
+**Online installation (Helm repository, no need to clone the repository)**: replace `./charts/tensor-fusion` with
+`tensor-fusion/tensor-fusion --version <chart version>`; the sample CRs are not packaged into the chart, so apply them from the repository's
+raw URLs (or clone the repository first). Using Ascend as an example:
 
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
@@ -294,18 +294,18 @@ RAW=https://raw.githubusercontent.com/NexusGPU/tensor-fusion/main/config/samples
 kubectl apply -f $RAW/provider-ascend.yaml -f $RAW/tensorfusioncluster-ascend.yaml
 ```
 
-换厂家只改 `initialGpuNodeLabelSelector` + 两个文件名：
+To switch vendors, change only `initialGpuNodeLabelSelector` + the two file names:
 
-| 厂家 | selector | 文件 |
+| Vendor | selector | Files |
 | --- | --- | --- |
 | Ascend | `huawei.com/npu.present=true` | provider-ascend / tensorfusioncluster-ascend |
 | MooreThreads | `mthreads.com/gpu.present=true` | provider-mthreads / tensorfusioncluster-mthreads |
 | PPU | `aliyun.com/ppu.present=true` | provider-ppu / tensorfusioncluster-ppu |
 
-### 4.2 多厂家（一个集群多种卡）
+### 4.2 Multiple vendors (several GPU types in one cluster)
 
-一个 Kubernetes 集群只有一个 `TensorFusionCluster`；多厂家时在 `spec.gpuPools` 下放多个
-pool（仅一个 `isDefault: true`）。现成例子 `config/samples/tensorfusioncluster-multi-vendor.yaml`：
+One Kubernetes cluster has only one `TensorFusionCluster`; with multiple vendors, put multiple pools under `spec.gpuPools`
+(only one with `isDefault: true`). A ready-made example is `config/samples/tensorfusioncluster-multi-vendor.yaml`:
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -318,22 +318,22 @@ kubectl apply -f config/samples/provider-nvidia.yaml \
   -f config/samples/tensorfusioncluster-multi-vendor.yaml
 ```
 
-**节点标签（`initialGpuNodeLabelSelector`）**——决定 operator watch 哪些节点：
+**Node label (`initialGpuNodeLabelSelector`)** determines which nodes the operator watches:
 
-- **单一厂家**：用该厂家的 present 标签即可（默认 `nvidia.com/gpu.present=true`），
-  **无需额外打标签**——该标签由厂家的 device-plugin / feature-discovery 自动打，TensorFusion 不负责打。
-- **多厂家**：各厂家 present 标签不同（`nvidia.com/gpu.present` / `huawei.com/npu.present` /
-  `mthreads.com/gpu.present` / `aliyun.com/ppu`），单个标签选不全。改用 vendor 无关的
-  `tensor-fusion.ai/watch-node=true`，并**手动给每个 GPU 节点打这个标签**（该标签不会自动生成）：
+- **Single vendor**: the vendor's present label is enough (default `nvidia.com/gpu.present=true`), and
+  **no extra labelling is needed**: the label is applied automatically by the vendor's device-plugin / feature-discovery, and TensorFusion is not responsible for applying it.
+- **Multiple vendors**: each vendor has a different present label (`nvidia.com/gpu.present` / `huawei.com/npu.present` /
+  `mthreads.com/gpu.present` / `aliyun.com/ppu`), so a single label cannot select them all. Use the vendor-neutral
+  `tensor-fusion.ai/watch-node=true` instead and **apply this label to every GPU node manually** (it is not generated automatically):
 
   ```bash
   kubectl label node <gpu-node> tensor-fusion.ai/watch-node=true
   ```
 
-- 或把 `initialGpuNodeLabelSelector` 留空（`--set initialGpuNodeLabelSelector=""`），
-  operator 会 watch 所有节点（无需打标签，但大集群有一定性能开销）。
+- Or leave `initialGpuNodeLabelSelector` empty (`--set initialGpuNodeLabelSelector=""`), and
+  the operator watches all nodes (no labelling needed, but with some performance overhead in large clusters).
 
-应用配置后检查资源：
+After applying the configuration, check the resources:
 
 ```bash
 kubectl get tensorfusioncluster
@@ -342,23 +342,23 @@ kubectl get gpunode,gpu -o wide
 kubectl describe gpupool <gpupool-name>
 ```
 
-## 5. 部署业务 Pod 验证
+## 5. Deploy a workload Pod for verification
 
-业务 Pod 必须满足以下条件，webhook 才会注入 TensorFusion client：
+A workload Pod must meet the following conditions before the webhook injects the TensorFusion client:
 
-- Pod label 有 `tensor-fusion.ai/enabled: "true"`。
-- 切片请求至少设置一个资源 annotation：`tensor-fusion.ai/tflops-request`、`tensor-fusion.ai/compute-percent-request` 或 `tensor-fusion.ai/vram-request`。标准 shared 整卡请求设置 `isolation: "shared"`、`dedicated-gpu: "true"` 和 `gpu-model`，无需用户填写 TFLOPS/VRAM；`gpu-count` 未填写时默认为 1，建议显式填写。
-- 多容器 Pod 必须设置 `tensor-fusion.ai/inject-container`。
+- The Pod has the label `tensor-fusion.ai/enabled: "true"`.
+- A fractional request sets at least one resource annotation: `tensor-fusion.ai/tflops-request`, `tensor-fusion.ai/compute-percent-request`, or `tensor-fusion.ai/vram-request`. A standard shared whole-GPU request sets `isolation: "shared"`, `dedicated-gpu: "true"`, and `gpu-model`, and the user does not need to fill in TFLOPS/VRAM; `gpu-count` defaults to 1 when not set, and setting it explicitly is recommended.
+- A multi-container Pod must set `tensor-fusion.ai/inject-container`.
 
-先查询目标 pool 中 operator 已识别的准确型号；下面的 `<gpu-model>` 必须替换为
-`GPU.status.gpuModel` 中的完整值：
+First query the exact models the operator has recognised in the target pool; `<gpu-model>` below must be replaced with
+the full value from `GPU.status.gpuModel`:
 
 ```bash
 kubectl get gpu -l tensor-fusion.ai/gpupool=<gpupool-name> \
   -o custom-columns='NAME:.metadata.name,MODEL:.status.gpuModel,CAPACITY:.status.capacity'
 ```
 
-示例 Deployment：
+Example Deployment:
 
 ```yaml
 apiVersion: apps/v1
@@ -391,7 +391,7 @@ spec:
           command: ["sh", "-c", "sleep infinity"]
 ```
 
-部署并检查：
+Deploy and check:
 
 ```bash
 kubectl apply -f smoke.yaml
@@ -401,7 +401,7 @@ kubectl get tensorfusionworkload,tensorfusionconnection -A
 kubectl get pods -A -l tensor-fusion.ai/component=worker -o wide
 ```
 
-进入业务容器实际调用 CUDA/NVML；仅 Pod 进入 Running/Ready 不代表 GPU 链路验证通过：
+Enter the workload container and actually call CUDA/NVML; a Pod that merely reaches Running/Ready does not mean the GPU path has been verified:
 
 ```bash
 POD=$(kubectl get pod -l app=tensor-fusion-smoke -o jsonpath='{.items[0].metadata.name}')
@@ -418,10 +418,10 @@ kubectl exec "$POD" -c pytorch -- nvidia-smi \
   --query-gpu=uuid,name,memory.total --format=csv,noheader
 ```
 
-shared 整卡用例应看到 `cuInit=0`、CUDA device count 与 `gpu-count` 一致。上面的 remote
-示例由 worker Pod 持有 `tensor-fusion.ai/gpu-ids`；local 示例则由业务 Pod 持有。CUDA/NVML
-应返回同一 GPU UUID（忽略 GPU CR 名称的 `gpu-` 前缀及 NVML 的 `GPU-` 格式前缀）。验证后
-删除 Deployment，并确认 TensorFusionWorkload/Connection 被清理、GPU available 恢复为 capacity：
+The shared whole-GPU case should show `cuInit=0` and a CUDA device count equal to `gpu-count`. In the remote
+example above the worker Pod holds `tensor-fusion.ai/gpu-ids`; in a local example the workload Pod holds it. CUDA/NVML
+should return the same GPU UUID (ignoring the `gpu-` prefix of the GPU CR name and the `GPU-` format prefix of NVML). After verification,
+delete the Deployment and confirm that the TensorFusionWorkload/Connection is cleaned up and the GPU available value returns to capacity:
 
 ```bash
 kubectl delete deployment tensor-fusion-smoke
@@ -430,38 +430,38 @@ kubectl get gpu -l tensor-fusion.ai/gpupool=<gpupool-name> \
   -o custom-columns='NAME:.metadata.name,CAPACITY:.status.capacity,AVAILABLE:.status.available'
 ```
 
-如果容器里配置了 `http_proxy` 或 `https_proxy`，本地服务探测建议使用：
+If `http_proxy` or `https_proxy` is configured in the container, use the following to probe a local service:
 
 ```bash
 curl --noproxy "*" http://127.0.0.1:8000/v1/models
 ```
 
-## 6. 常见 workload annotation
+## 6. Common workload annotations
 
-| Annotation | 说明 |
+| Annotation | Description |
 | --- | --- |
-| `tensor-fusion.ai/gpupool` | 指定 GPUPool。未指定时依赖默认 pool。 |
-| `tensor-fusion.ai/is-local-gpu` | `true` 表示业务 Pod 调度到 GPU 节点本地用卡；`false` 表示 remote 模式。 |
-| `tensor-fusion.ai/isolation` | `shared`、`soft`、`hard`、`partitioned`。 |
-| `tensor-fusion.ai/dedicated-gpu` | `true` 表示按 `gpu-model` 补齐整卡容量；它本身不会把 isolation 改为 shared。标准 shared 请求需要同时设置 `isolation=shared`。 |
-| `tensor-fusion.ai/gpu-count` | 请求 GPU 数量。 |
-| `tensor-fusion.ai/gpu-model` | 请求的 GPU 型号；使用 `dedicated-gpu=true` 时必须填写，应使用 `GPU.status.gpuModel` 的准确值，并确保 operator 已加载该型号容量。 |
-| `tensor-fusion.ai/gpu-indices` | 指定 GPU index，是硬过滤条件。指定后 `gpu-count` 按 index 数量计算。 |
-| `tensor-fusion.ai/tflops-request` | 调度用 TFLOPs 请求，推荐优先使用。 |
-| `tensor-fusion.ai/compute-percent-request` | 按百分比请求算力。与 TFLOPs request 互斥。 |
-| `tensor-fusion.ai/vram-request` | 调度用显存请求。 |
-| `tensor-fusion.ai/inject-container` | 多容器 Pod 中指定要注入的容器，多个容器用逗号分隔。 |
+| `tensor-fusion.ai/gpupool` | Selects the GPUPool. When not set, the default pool is relied on. |
+| `tensor-fusion.ai/is-local-gpu` | `true` means the workload Pod is scheduled to a GPU node and uses the GPU locally; `false` means remote mode. |
+| `tensor-fusion.ai/isolation` | `shared`, `soft`, `hard`, `partitioned`. |
+| `tensor-fusion.ai/dedicated-gpu` | `true` means the whole-GPU capacity is filled in according to `gpu-model`; by itself it does not change isolation to shared. A standard shared request must also set `isolation=shared`. |
+| `tensor-fusion.ai/gpu-count` | Number of GPUs requested. |
+| `tensor-fusion.ai/gpu-model` | Requested GPU model; required when `dedicated-gpu=true` is used. Use the exact value of `GPU.status.gpuModel` and make sure the operator has loaded the capacity of that model. |
+| `tensor-fusion.ai/gpu-indices` | Selects GPU indices; this is a hard filter. When set, `gpu-count` is computed from the number of indices. |
+| `tensor-fusion.ai/tflops-request` | TFLOPs request used for scheduling; recommended as the first choice. |
+| `tensor-fusion.ai/compute-percent-request` | Requests compute as a percentage. Mutually exclusive with the TFLOPs request. |
+| `tensor-fusion.ai/vram-request` | GPU memory request used for scheduling. |
+| `tensor-fusion.ai/inject-container` | Selects the containers to inject in a multi-container Pod; separate multiple containers with commas. |
 
-`shared` 是完整空闲 GPU 的整卡分配策略，不挂载 soft limiter 或 hard preload。用户无需填写
-TFLOPS/VRAM request/limit；webhook 会根据 `gpu-model` 补齐整卡容量，allocator 分配后会将
-所选 GPU CR 的 available TFLOPS/VRAM 都扣减为 0。shared 不优先选择带 shared label 的节点，
-仍沿用现有 GPU/节点 binpack 评分。
+`shared` is a whole-GPU allocation policy for complete idle GPUs; it mounts neither the soft limiter nor the hard preload. The user does not need to fill in
+TFLOPS/VRAM request/limit; the webhook fills in the whole-GPU capacity according to `gpu-model`, and after allocation the allocator reduces
+both the available TFLOPS and VRAM of the selected GPU CR to 0. shared does not prefer nodes that carry a shared label;
+it still uses the existing GPU/node binpack scoring.
 
-## 7. 排障
+## 7. Troubleshooting
 
 ### 7.1 Pod Pending
 
-先看 Kubernetes 调度事件：
+First look at the Kubernetes scheduling events:
 
 ```bash
 kubectl describe pod <pod-name>
@@ -469,15 +469,15 @@ kubectl get nodes -o wide
 kubectl get nodes --show-labels
 ```
 
-常见原因：
+Common causes:
 
-- 节点 taint 未配置 toleration。
-- Pod 的 nodeSelector、nodeAffinity 和 GPU 节点不匹配。
-- GPUPool 的 nodeSelector 没选中节点。
-- `tensor-fusion.ai/gpu-indices` 指定的卡不存在或已被其他 workload 占用。
-- GPU 资源请求超过 pool 中可用资源。
+- No toleration is configured for a node taint.
+- The Pod's nodeSelector or nodeAffinity does not match the GPU nodes.
+- The GPUPool's nodeSelector selects no nodes.
+- The GPU specified by `tensor-fusion.ai/gpu-indices` does not exist or is already occupied by another workload.
+- The GPU resource request exceeds the resources available in the pool.
 
-继续检查 TensorFusion 资源：
+Then check the TensorFusion resources:
 
 ```bash
 kubectl get gpupool,gpunode,gpu -o wide
@@ -486,12 +486,12 @@ kubectl describe gpu <gpu-name>
 kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c controller --tail=200
 ```
 
-### 7.2 CUDA/NVML driver 库路径异常
+### 7.2 Wrong CUDA/NVML driver library paths
 
-如果出现 `nvidia-smi` 报 `NVML Function Not Found`，或者 worker 日志中出现类似
-`Assertion failed, cuInit_fn != nullptr`，先确认宿主机和出错容器内实际存在的 driver 库路径。
+If `nvidia-smi` reports `NVML Function Not Found`, or the worker log shows something like
+`Assertion failed, cuInit_fn != nullptr`, first confirm the driver library paths that actually exist on the host and in the failing container.
 
-宿主机上检查 NVIDIA driver 是否正常，以及 driver 库安装在哪个目录：
+On the host, check that the NVIDIA driver works and which directory the driver libraries are installed in:
 
 ```bash
 nvidia-smi
@@ -503,10 +503,10 @@ ls -l \
   /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 2>/dev/null
 ```
 
-`/usr/lib64` 常见于 RHEL/CentOS/Rocky/openEuler/Kylin 系，`/usr/lib/x86_64-linux-gnu`
-常见于 Debian/Ubuntu 系。Pod 中最终能看到哪些路径，还取决于 NVIDIA container runtime 的挂载结果和容器镜像自身的发行版。
+`/usr/lib64` is common on the RHEL/CentOS/Rocky/openEuler/Kylin family, and `/usr/lib/x86_64-linux-gnu`
+is common on the Debian/Ubuntu family. Which paths are finally visible in the Pod also depends on what the NVIDIA container runtime mounts and on the distribution of the container image itself.
 
-然后在出错的 Pod 容器内确认实际链接和可用路径：
+Then, inside the failing Pod container, confirm the actual linkage and the available paths:
 
 ```bash
 ldd "$(which nvidia-smi)" | grep -E 'tensor-fusion|nvidia-ml|cuda'
@@ -521,13 +521,13 @@ ls -l \
   /usr/local/nvidia/lib64/libnvidia-ml.so.1 2>/dev/null
 ```
 
-如果需要全量查找：
+If a full search is needed:
 
 ```bash
 find /usr /lib /lib64 /usr/local \( -name 'libcuda.so*' -o -name 'libnvidia-ml.so*' \) 2>/dev/null
 ```
 
-如果 TensorFusion worker 需要显式指定 driver 库路径，使用出错容器内真实存在的稳定 `.so.1` symlink：
+If the TensorFusion worker needs the driver library paths specified explicitly, use the stable `.so.1` symlinks that really exist in the failing container:
 
 ```yaml
 env:
@@ -537,22 +537,22 @@ env:
     value: <container-visible-libnvidia-ml.so.1-path>
 ```
 
-不要固定到类似 `/usr/lib64/libnvidia-ml.so.580.126.09` 或
-`/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.535.216.01` 这样的版本号路径。驱动升级后，版本号文件可能变化，`.so.1` symlink 才会跟随当前驱动。
+Do not pin a versioned path such as `/usr/lib64/libnvidia-ml.so.580.126.09` or
+`/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.535.216.01`. After a driver upgrade the versioned file may change; only the `.so.1` symlink follows the current driver.
 
-如果日志是 `cuInit_fn != nullptr`，重点检查 `TF_CUDA_LIB_PATH` 指向的 `libcuda.so.1` 是否在出错容器内存在，并且包含 `cuInit` 符号：
+If the log says `cuInit_fn != nullptr`, focus on whether the `libcuda.so.1` that `TF_CUDA_LIB_PATH` points to exists in the failing container and contains the `cuInit` symbol:
 
 ```bash
 readelf -Ws <container-visible-libcuda.so.1-path> 2>/dev/null | grep ' cuInit'
 ```
 
-如果宿主机有 driver 库但 Pod 内没有，优先排查 NVIDIA container runtime、NVIDIA device plugin 和 Pod 是否真正分配到了 GPU 设备。如果 Pod 内有正确库但仍报错，确认这些环境变量注入到了真正崩溃的 worker 容器，而不是只注入到了业务容器。
+If the host has the driver libraries but the Pod does not, first investigate the NVIDIA container runtime, the NVIDIA device plugin, and whether the Pod was really allocated a GPU device. If the Pod has the correct libraries but still fails, confirm that these environment variables were injected into the worker container that actually crashes, not only into the workload container.
 
-### 7.3 Pod 被 Evicted
+### 7.3 Pod is Evicted
 
-如果事件里出现 `The node was low on resource: memory`，说明是节点内存压力驱逐，不是 GPU 调度失败。
+If the events show `The node was low on resource: memory`, this is an eviction caused by node memory pressure, not a GPU scheduling failure.
 
-检查：
+Check:
 
 ```bash
 kubectl describe pod <pod-name>
@@ -560,15 +560,15 @@ kubectl top pod <pod-name> --containers
 kubectl top node <node-name>
 ```
 
-处理方式：
+What to do:
 
-- 给业务容器设置合理的 memory request 和 limit。
-- remote 模式下，模型加载期间 client 侧可能有额外内存峰值，需要按实际压测结果预留。
-- 避免在低内存节点上启动大模型。
+- Set a reasonable memory request and limit for the workload container.
+- In remote mode the client side may have an extra memory peak while a model loads; reserve memory according to actual load test results.
+- Avoid starting large models on nodes with little memory.
 
-### 7.4 vLLM 启动后本地 curl 无返回
+### 7.4 Local curl gets no response after vLLM starts
 
-先确认端口是否监听：
+First confirm whether the port is listening:
 
 ```bash
 ps -ef | grep -E 'vllm|EngineCore|APIServer' | grep -v grep
@@ -576,31 +576,31 @@ ss -lntp | grep 8000
 tail -n 100 /tmp/vllm.log
 ```
 
-如果 `curl` 被代理环境变量影响，使用：
+If `curl` is affected by proxy environment variables, use:
 
 ```bash
 curl --noproxy "*" -v --max-time 10 http://127.0.0.1:8000/v1/models
 ```
 
-如果日志里有 CUDA OOM，降低 `--gpu-memory-utilization`、减小 `--max-model-len`，或释放同一张 GPU 上其他进程。
+If the log shows CUDA OOM, lower `--gpu-memory-utilization`, reduce `--max-model-len`, or free other processes on the same GPU.
 
-### 7.5 `tf_gpu_usage` / `tf_worker_usage` 没有数据
+### 7.5 `tf_gpu_usage` / `tf_worker_usage` have no data
 
-Hypervisor 只把指标写到 `/logs/metrics.log`，由同一个 Pod 里的 `vector` sidecar 上传到 GreptimeDB。Hypervisor 看不到上传结果：数据库拒绝写入时，Hypervisor 日志里没有任何报错，要看 `vector` 容器的日志：
+The Hypervisor only writes metrics to `/logs/metrics.log`; the `vector` sidecar in the same Pod uploads them to GreptimeDB. The Hypervisor cannot see the upload result: when the database rejects a write, there is no error in the Hypervisor log, and you have to look at the log of the `vector` container:
 
 ```bash
 kubectl -n tensor-fusion-sys logs <hypervisor-pod> -c vector --since=10m \
   | grep -E 'Not retriable|Events dropped'
 ```
 
-被拒绝时每次上传都有这样两行（`component_id` 是 sink 名，Controller 的 sidecar 对应 `sink_greptimedb_operator_metrics`）：
+When writes are rejected, every upload produces these two lines (`component_id` is the sink name; the Controller's sidecar corresponds to `sink_greptimedb_operator_metrics`):
 
 ```text
 ERROR sink{component_kind="sink" component_id=sink_greptimedb_hypervisor_metrics component_type=http}:request{request_id=12}: vector::sinks::util::retries: Not retriable; dropping the request. reason="Default retry strategy: Bad Request"
 ERROR sink{component_kind="sink" component_id=sink_greptimedb_hypervisor_metrics component_type=http}:request{request_id=12}: vector_common::internal_event::component_events_dropped: Events dropped intentional=false count=7 reason="Service call failed. No retries or retries exhausted."
 ```
 
-Vector 不打印数据库的应答。取一行指标手工提交，就能看到拒绝原因：
+Vector does not print the database's response. Take one metric line and submit it by hand to see the reason for the rejection:
 
 ```bash
 kubectl -n tensor-fusion-sys exec <hypervisor-pod> -c vector -- tail -n 1 /logs/metrics.log > line.txt
@@ -608,11 +608,11 @@ curl -sS -X POST --data-binary @line.txt \
   'http://<greptimedb-host>:4000/v1/influxdb/api/v2/write?db=public&precision=ms'
 ```
 
-应答形如 `column memory_bytes expect type UInt64(UInt64Type), given: INT64(4)`，说明这一行里某个字段的类型和表里已有的列不一致：GreptimeDB 按第一次写入的类型建列，之后类型不同的行全部拒绝。`SHOW CREATE TABLE tf_gpu_usage;` 可以看到列类型。本版本 Hypervisor 写入的类型与旧版 Hypervisor 建的表一致（`memory_bytes` 为无符号整数，`power_usage` 为整数）；如果表是用其他类型建的，并且表里的历史数据可以丢弃，`DROP TABLE` 之后下一次写入会重新建表。Hypervisor 的 sidecar 每行指标单独提交一次，被拒绝的行不影响其他行。
+A response such as `column memory_bytes expect type UInt64(UInt64Type), given: INT64(4)` means that the type of some field in this line differs from the existing column in the table: GreptimeDB creates a column with the type of the first write and afterwards rejects every line with a different type. `SHOW CREATE TABLE tf_gpu_usage;` shows the column types. The types written by the Hypervisor in this version match the tables created by older Hypervisors (`memory_bytes` is an unsigned integer, `power_usage` is an integer); if the table was created with other types and the historical data in it can be discarded, after `DROP TABLE` the next write recreates the table. The Hypervisor's sidecar submits each metric line separately, so a rejected line does not affect the other lines.
 
-### 7.6 Hypervisor 日志
+### 7.6 Hypervisor logs
 
-启用 `vector` sidecar（`enableVector: true`）时，Hypervisor 把自己的日志同时写到 `/logs/pods/<pod>/hypervisor.log`（最多 3 个文件，每个 50 MB，保留 7 天），由 sidecar 写入 `tf_system_log`：
+When the `vector` sidecar is enabled (`enableVector: true`), the Hypervisor also writes its own logs to `/logs/pods/<pod>/hypervisor.log` (at most 3 files of 50 MB each, kept for 7 days), and the sidecar writes them to `tf_system_log`:
 
 ```sql
 SELECT greptime_timestamp, pod, message FROM tf_system_log
@@ -620,19 +620,19 @@ WHERE component = 'hypervisor' AND container = 'hypervisor'
 ORDER BY greptime_timestamp DESC LIMIT 50;
 ```
 
-默认日志级别是 Info。每个控制周期一行的限速明细（`ERL [...] util=... rate=...`）在日志级别 4 才输出，有两种打开方式。
+The default log level is Info. The rate limiting detail printed as one line per control cycle (`ERL [...] util=... rate=...`) is output only at log level 4, which can be turned on in two ways.
 
-**临时打开，不重建 Pod。** 给 Hypervisor 进程发 `SIGUSR1`，日志级别升到 4，10 分钟后自动恢复为启动时的级别；这期间再发一次，10 分钟重新计时。启动时的级别已经不低于 4 时，信号不改变任何东西，只输出一行日志。升高和恢复各有一行日志（`Log verbosity raised from 0 to 4 for 10m0s`、`Log verbosity is back to 0`）。
+**Turn it on temporarily, without recreating the Pod.** Send `SIGUSR1` to the Hypervisor process: the log level rises to 4 and returns automatically to the startup level after 10 minutes; sending it again during that time restarts the 10 minutes. When the startup level is already 4 or higher, the signal changes nothing and only outputs one log line. Raising and restoring each produce one log line (`Log verbosity raised from 0 to 4 for 10m0s`, `Log verbosity is back to 0`).
 
-Hypervisor Pod 使用宿主机的 PID 命名空间（`hostPID: true`），进程号不是 1，要先查出来。Hypervisor 是 Pod 的第一个容器，`kubectl exec` 默认进入它；镜像基于 `ubuntu:24.04`，带 shell 和 `pidof`：
+The Hypervisor Pod uses the host's PID namespace (`hostPID: true`), so the process ID is not 1 and has to be looked up first. The Hypervisor is the first container of the Pod, so `kubectl exec` enters it by default; the image is based on `ubuntu:24.04` and includes a shell and `pidof`:
 
 ```bash
 kubectl -n tensor-fusion-sys exec <hypervisor-pod> -- sh -c 'kill -USR1 $(pidof hypervisor)'
 ```
 
-也可以在节点上以 root 执行 `pkill -USR1 -x hypervisor`。本版本之前的 Hypervisor 不处理这个信号，收到后进程直接退出、容器重启，发送前先确认镜像版本。
+You can also run `pkill -USR1 -x hypervisor` as root on the node. Hypervisors before this version do not handle this signal: on receiving it the process exits and the container restarts, so confirm the image version before sending it.
 
-**长期打开。** 通过 Pool 的 Hypervisor Pod 模板加启动参数 `-v=4`（`TensorFusionCluster` 的 `spec.gpuPools[].specTemplate.componentConfig.hypervisor.podTemplate`）：
+**Turn it on permanently.** Add the startup argument `-v=4` through the Pool's Hypervisor Pod template (`spec.gpuPools[].specTemplate.componentConfig.hypervisor.podTemplate` of the `TensorFusionCluster`):
 
 ```yaml
 podTemplate:
@@ -643,19 +643,19 @@ podTemplate:
           args: ["-v=4"]
 ```
 
-修改模板会让该 Pool 的 Hypervisor Pod 逐个重建，排查结束后去掉参数时会再重建一次。`-log-output-path=none` 关闭日志文件。
+Changing the template recreates the Hypervisor Pods of that Pool one by one, and they are recreated once more when the argument is removed after troubleshooting. `-log-output-path=none` turns off the log file.
 
-### 7.7 已知问题
+### 7.7 Known issues
 
-- **hard 隔离 + remote-vGPU `v2.26.0` 下 vLLM 0.28.0 启动失败。** client/worker 镜像为 `tensorfusion/tensor-fusion-client:v2.26.0`、`tensorfusion/tensor-fusion-worker:v2.26.0` 时，hard 隔离的 vLLM 0.28.0 报 `call api=cuMemcpy failed … named symbol not found`。缺陷在 remote-vGPU worker（独立组件），不在本 operator。
-- **`shared` 隔离是整卡独占。** 同一张 GPU 上的两个 `shared` Pod 先后运行，不会同时运行。
-- **算力限额约束的是设备时间占比，不是 solo 吞吐的比例。** 多个 Pod 共用一张卡时，GPU 在两个 context 之间每切换一次约耗时 65 µs（RTX 3090 实测），驱动把这段时间也计入利用率，而且大多记在占用引擎时间最长的 Pod 名下。因此配额较大的 Pod 达到自己的利用率目标时，实际得到的 kernel 时间约少 20%：与一个 30% 配额的邻居同卡，60% 配额实测为 solo 吞吐的 0.485，50% 为 0.385，40% 为 0.309。两个不设限的短 kernel 负载同卡时，合计吞吐约为单独运行一个的 0.83（长 kernel 负载 0.93～0.95；ONNX Runtime 的 CNN / encoder 推理和以拷贝为主的负载没有损失）。
-- **多个限额 Pod 同卡时，短 kernel 负载的小配额 Pod 可能长时间低于配额。** 驱动约每 200 ms 采一次利用率并整份记到当时占用设备的进程名下，和 10 ms 一次的令牌补充叠加后，小配额 Pod 的进程利用率会连续十几秒读成 0。默认的控制逻辑在这种读数下可能把它的速率压住约两分钟（RTX 3090 实测：0.28 ms 矩阵乘负载，30% / 60% 两个 Pod，30% 的一方只有 solo 吞吐的 0.16）。长 kernel 负载和 3B～7B 的 LLM 推理不受影响。可以在 pool 的 hypervisor Pod 模板里设置环境变量 `TF_ERL_SHARED_CALIBRATION=confirmed` 启用另一套处理方式（进程利用率只作慢校准，由设备自身的利用率确认变化）：上述场景变为 0.27，但令牌成本差异很大的负载混部时，一方可能超出配额 10%～30%，负载突然变重时前 10 秒可能超出更多。该开关默认关闭，属于实验性选项。
-- **混合架构集群上的 Helm hook Job。** 生成和注入 webhook 证书的两个 hook Job 默认只限定 `kubernetes.io/os: linux`，并沿用 controller 的 `affinity`、`tolerations`，不限定 CPU 架构。hook Pod 落到拉不到该镜像的节点时，`helm install` / `helm upgrade` 会一直等到超时。用 `controller.admissionWebhooks.patch.nodeSelector`（例如 `kubernetes.io/arch: amd64`）、`affinity`、`tolerations` 指定 hook Pod 的节点。
+- **vLLM 0.28.0 fails to start with hard isolation + remote-vGPU `v2.26.0`.** With the client/worker images `tensorfusion/tensor-fusion-client:v2.26.0` and `tensorfusion/tensor-fusion-worker:v2.26.0`, vLLM 0.28.0 under hard isolation reports `call api=cuMemcpy failed … named symbol not found`. The defect is in the remote-vGPU worker (a separate component), not in this operator.
+- **`shared` isolation is exclusive use of a whole GPU.** Two `shared` Pods on the same GPU run one after the other, not at the same time.
+- **The compute limit constrains the share of device time, not the fraction of solo throughput.** When several Pods share a GPU, each switch between two contexts costs the GPU about 65 µs (measured on an RTX 3090); the driver counts this time as utilization too, and mostly charges it to the Pod that holds the engine time longest. As a result, when a Pod with a larger quota reaches its own utilization target, the kernel time it actually gets is about 20% less: sharing a GPU with a neighbour at a 30% quota, a 60% quota measured 0.485 of solo throughput, 50% measured 0.385, and 40% measured 0.309. When two unlimited short-kernel workloads share a GPU, their combined throughput is about 0.83 of one running alone (0.93 to 0.95 for long-kernel workloads; ONNX Runtime CNN / encoder inference and copy-dominated workloads lose nothing).
+- **When several limited Pods share a GPU, a small-quota Pod with a short-kernel workload may stay below its quota for a long time.** The driver samples utilization about every 200 ms and charges the whole sample to the process occupying the device at that moment; combined with the token refill every 10 ms, the process utilization of the small-quota Pod reads 0 for more than ten seconds in a row. With such readings the default control logic may hold its rate down for about two minutes (measured on an RTX 3090: a 0.28 ms matrix multiplication workload, two Pods at 30% / 60%, the 30% side gets only 0.16 of solo throughput). Long-kernel workloads and inference with 3B to 7B LLMs are not affected. You can set the environment variable `TF_ERL_SHARED_CALIBRATION=confirmed` in the pool's hypervisor Pod template to enable a different handling (process utilization is used only for slow calibration, and changes are confirmed by the device's own utilization): the scenario above becomes 0.27, but when workloads with very different token costs are co-located, one side may exceed its quota by 10% to 30%, and may exceed it by more in the first 10 seconds when a workload suddenly becomes heavier. This switch is off by default and is an experimental option.
+- **Helm hook Jobs on mixed-architecture clusters.** The two hook Jobs that generate and inject the webhook certificate are by default restricted only to `kubernetes.io/os: linux` and reuse the controller's `affinity` and `tolerations`; they are not restricted to a CPU architecture. When a hook Pod lands on a node that cannot pull the image, `helm install` / `helm upgrade` waits until it times out. Use `controller.admissionWebhooks.patch.nodeSelector` (for example `kubernetes.io/arch: amd64`), `affinity`, and `tolerations` to choose the nodes for the hook Pods.
 
-## 8. 升级、回滚、卸载
+## 8. Upgrade, rollback, uninstall
 
-升级前建议备份当前 Helm values 和关键 CR：
+Before upgrading, back up the current Helm values and the key CRs:
 
 ```bash
 TS=$(date +%Y%m%d-%H%M%S)
@@ -665,7 +665,7 @@ kubectl get tensorfusioncluster,gpupool,gpunode,gpu,workloadprofile,tensorfusion
   > "backup-${TS}/tf-state.yaml"
 ```
 
-同一架构内的常规 Chart 升级：
+A regular Chart upgrade within the same architecture:
 
 ```bash
 helm upgrade tensor-fusion-sys ./charts/tensor-fusion \
@@ -673,52 +673,52 @@ helm upgrade tensor-fusion-sys ./charts/tensor-fusion \
   -f <your-values.yaml>
 ```
 
-此命令会更新同一 Helm release 中的数据库、监控等组件，**不能用于 v1→v2 架构升级**。
-v1→v2 必须使用精确升级流程：只从固定版本 Helm 包中提取并 apply CRD、RBAC 和
-scheduler ConfigMap，在 `operator=0` 窗口内同步切换 operator/Hypervisor 镜像与
-GPUPool 隔离策略，不执行整包 `helm upgrade`。
+This command updates the database, monitoring, and other components in the same Helm release and **must not be used for the v1→v2 architecture upgrade**.
+v1→v2 must follow the precise upgrade procedure: extract and apply only the CRDs, RBAC, and
+scheduler ConfigMap from the pinned-version Helm package, switch the operator/Hypervisor images and
+the GPUPool isolation policy together inside an `operator=0` window, and do not run a whole-package `helm upgrade`.
 
-详细步骤及回退方案见：
+For the detailed steps and the rollback plan see:
 
 - `docs/v1-to-v2-upgrade-best-practice.md`
 
-### 8.1 升级说明 / breaking changes
+### 8.1 Upgrade notes / breaking changes
 
-chart 与 operator、hypervisor 镜像要一起升级，不要用新 chart 搭配旧镜像：旧 operator 不提供临时容器校验的 webhook 路径（默认 `failurePolicy: Ignore` 下校验不生效，设为 `Fail` 时集群内所有 `kubectl debug` 会被拒绝），也不会把 `GREPTIME_PASSWORD` 注入 hypervisor Pod 的 vector 容器（`greptime.isCloud=true` 时该容器无法启动，用量指标中断）。
+Upgrade the chart together with the operator and hypervisor images; do not pair a new chart with old images: an old operator does not serve the webhook path for ephemeral container validation (with the default `failurePolicy: Ignore` the validation does not take effect, and when it is set to `Fail` every `kubectl debug` in the cluster is rejected), and it does not inject `GREPTIME_PASSWORD` into the vector container of the hypervisor Pod (with `greptime.isCloud=true` that container cannot start and usage metrics are interrupted).
 
-- **指标列类型。** hypervisor 写入 `tf_gpu_usage`、`tf_worker_usage` 的字段类型已固定：`memory_bytes` 为无符号整数，`power_usage`、`nvlink_rx`、`nvlink_tx` 为有符号整数，其余为浮点。表里已有列的类型与此不同的集群（例如曾用自定义参数运行 hypervisor、由其他写入方建表），升级后该表的每一行都会被数据库以 HTTP 400 拒绝，hypervisor 日志里看不到。按 7.5 的方法确认；处理办法是导出需要保留的历史数据后 `DROP TABLE`，表会在下一次写入时按新类型重建。operator 不会自动删表。
-- **NodeOverlay 默认只匹配 AWS 上的 NVIDIA 机型。** `karpenterNodeOverlay.requirements` 的默认值是 `karpenter.k8s.aws/instance-gpu-count > 0` 且 `karpenter.k8s.aws/instance-gpu-manufacturer in [nvidia]`，不再对所有 NodePool 生效。其他云上的 Karpenter 或其他厂商的卡，升级后默认的 overlay 不匹配任何节点，需要自己设置 `karpenterNodeOverlay.requirements`。
-- **`reserved` 容量类型的 Pool。** 内置价格表中没有预留实例价格的 13 个 AWS 机型不再被 `reserved` Pool 选中；需要这些机型时改用 `on-demand` 或在 ProviderConfig 中补充价格。
-- **没有 owner 的空 TensorFusionWorkload 会被回收。** 由 Pod webhook 自动创建、没有 ownerReference、且已经 5 分钟没有任何 Pod 引用的 workload，升级后在第一次 reconcile 时被删除，其 `status.recommendation` 一并丢失。用户自己创建的 workload，以及带有 owner（Deployment、StatefulSet、Job、Pod 等）的 workload 不受影响。
-- **hypervisor Pod 重建一次。** 开启 vector sidecar 的 Pool，升级后每个 hypervisor Pod 会因模板变化重建一次；业务 Pod 不重启。
-- **Go 库接口（引用 `pkg/hypervisor`、`pkg/constants` 的项目）。** `(*APIClient).ResolveDeviceFp16TFlops` 已删除；`constants.TFDataPathWorkerExpr` 现在依赖容器内的 `TF_SHM_POD_NAMESPACE`、`TF_SHM_POD_NAME` 两个环境变量，使用它的调用方需要同时设置这两个变量。
+- **Metric column types.** The field types the hypervisor writes to `tf_gpu_usage` and `tf_worker_usage` are now fixed: `memory_bytes` is an unsigned integer, `power_usage`, `nvlink_rx`, and `nvlink_tx` are signed integers, and the rest are floats. On clusters where existing columns in a table have different types (for example, the hypervisor was once run with custom arguments, or the table was created by another writer), after the upgrade every row for that table is rejected by the database with HTTP 400, and nothing shows in the hypervisor log. Confirm with the method in 7.5; the fix is to export the historical data you need to keep and then `DROP TABLE`, after which the table is recreated with the new types on the next write. The operator does not drop tables automatically.
+- **NodeOverlay matches only NVIDIA instance types on AWS by default.** The default value of `karpenterNodeOverlay.requirements` is `karpenter.k8s.aws/instance-gpu-count > 0` and `karpenter.k8s.aws/instance-gpu-manufacturer in [nvidia]`, and it no longer applies to all NodePools. With Karpenter on other clouds or GPUs from other vendors, the default overlay matches no node after the upgrade, and you need to set `karpenterNodeOverlay.requirements` yourself.
+- **Pools with the `reserved` capacity type.** The 13 AWS instance types that have no reserved instance price in the built-in price table are no longer selected by `reserved` Pools; if you need these instance types, switch to `on-demand` or add the prices in the ProviderConfig.
+- **Empty TensorFusionWorkloads without an owner are reclaimed.** A workload that was created automatically by the Pod webhook, has no ownerReference, and has not been referenced by any Pod for 5 minutes is deleted at the first reconcile after the upgrade, and its `status.recommendation` is lost with it. Workloads created by users themselves, and workloads with an owner (Deployment, StatefulSet, Job, Pod, and so on), are not affected.
+- **hypervisor Pods are recreated once.** In Pools with the vector sidecar enabled, each hypervisor Pod is recreated once after the upgrade because of the template change; workload Pods are not restarted.
+- **Go library interfaces (projects that import `pkg/hypervisor` or `pkg/constants`).** `(*APIClient).ResolveDeviceFp16TFlops` has been removed; `constants.TFDataPathWorkerExpr` now depends on the two environment variables `TF_SHM_POD_NAMESPACE` and `TF_SHM_POD_NAME` inside the container, and callers that use it must set both variables as well.
 
-卸载脚本支持 Helm、`helm template | kubectl apply` 和 `make deploy` / Kustomize
-三种安装方式。它会删除集群内全部 TensorFusion CR、控制面、webhook、CRD、
-TensorFusion Node 标签、NodeOverlay、PVC，以及 Helm、Kustomize 和 GreptimeDB
-使用的 namespace。确认不再需要其中的数据和业务后执行：
+The uninstall script supports three installation methods: Helm, `helm template | kubectl apply`, and `make deploy` / Kustomize.
+It deletes all TensorFusion CRs in the cluster, the control plane, webhooks, CRDs,
+TensorFusion Node labels, NodeOverlay, PVCs, and the namespaces used by Helm, Kustomize, and GreptimeDB.
+Run it after confirming that the data and workloads in them are no longer needed:
 
 ```bash
 NAMESPACE=tensor-fusion-sys HELM_RELEASE=tensor-fusion-sys ./scripts/uninstall.sh
 ```
 
-运行前可以查看完整参数和删除范围：
+Before running it you can view the full parameters and the scope of deletion:
 
 ```bash
 ./scripts/uninstall.sh --help
 ```
 
-默认值：
+Defaults:
 
-| 变量 | 默认值 | 用途 |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `NAMESPACE` | `tensor-fusion-sys` | Helm / manifest 控制面 namespace |
-| `KUSTOMIZE_NAMESPACE` | `tensor-fusion` | `make deploy` 使用的 namespace |
-| `HELM_RELEASE` | `tensor-fusion-sys` | Helm release 名称 |
-| `RESOURCE_PREFIX` | 与 `HELM_RELEASE` 相同 | manifest 资源名和 PVC 前缀 |
-| `WAIT_TIMEOUT_SECONDS` | `600` | 等待 CR finalizer 和资源删除的超时秒数 |
+| `NAMESPACE` | `tensor-fusion-sys` | Control plane namespace for Helm / manifest installs |
+| `KUSTOMIZE_NAMESPACE` | `tensor-fusion` | Namespace used by `make deploy` |
+| `HELM_RELEASE` | `tensor-fusion-sys` | Helm release name |
+| `RESOURCE_PREFIX` | Same as `HELM_RELEASE` | Prefix of manifest resource names and PVCs |
+| `WAIT_TIMEOUT_SECONDS` | `600` | Timeout in seconds for waiting on CR finalizers and resource deletion |
 
-非默认 release 名称或 `helm template` 资源前缀可以额外设置：
+For a non-default release name or `helm template` resource prefix, set these in addition:
 
 ```bash
 NAMESPACE=<namespace> \
@@ -727,18 +727,18 @@ RESOURCE_PREFIX=<rendered-resource-prefix> \
 ./scripts/uninstall.sh
 ```
 
-脚本按 finalizer 依赖顺序等待资源删除，任一步失败都会停止，不会继续删除
-controller 或 CRD。它会清理 TensorFusion Node 标签、taint、NodeOverlay、
-可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。device plugin
-断开后，kubelet 会经过约 5 分钟 grace period 清理内部 endpoint 和 checkpoint；
-期间 Node status 可能保留非零 capacity，但 allocatable 已变为 `0`。宽限期结束后，
-kubelet 会有意保留值为 `0` 的 index key。脚本随后将这些 key 从 Node status 删除，
-并经过一个状态同步窗口确认 kubelet 不再写回。
-如果超过 `WAIT_TIMEOUT_SECONDS` 仍未删除，脚本会报错。脚本不会删除
-`nvidia.com/gpu.present`、`huawei.com/npu.present` 等厂家发现标签。卸载前必须
-先备份业务、PVC 数据和 TensorFusion CR 状态。
+The script waits for resources to be deleted in finalizer dependency order and stops if any step fails, without going on to delete
+the controller or CRDs. It cleans up TensorFusion Node labels, taints, NodeOverlay,
+the schedulable `tensor-fusion.ai/index*` capacity, and TensorFusion PVCs/PVs. After the device plugin
+disconnects, the kubelet takes a grace period of about 5 minutes to clean up its internal endpoints and checkpoint;
+during this time the Node status may keep a non-zero capacity, but allocatable has already become `0`. After the grace period ends,
+the kubelet intentionally keeps the index keys with a value of `0`. The script then removes these keys from the Node status
+and waits one status sync window to confirm that the kubelet no longer writes them back.
+If they are still not deleted after `WAIT_TIMEOUT_SECONDS`, the script reports an error. The script does not delete
+vendor discovery labels such as `nvidia.com/gpu.present` and `huawei.com/npu.present`. Before uninstalling, you must
+first back up the workloads, PVC data, and TensorFusion CR state.
 
-`scripts/uninstall.sh` 可以作为单文件复制到目标机器执行，不要求同时下载完整仓库。
-当前 Helm 和 Kustomize 默认安装产生的集群级 RBAC、webhook、CRD 等资源名已内置
-在脚本中。如果脚本旁边存在 `charts/tensor-fusion` 或 `config/default`，还会额外
-根据本地 manifest 执行一次兼容性清理；这两个目录不是单文件卸载的必需依赖。
+`scripts/uninstall.sh` can be copied to the target machine and run as a single file; it does not require downloading the full repository as well.
+The names of the cluster-scoped RBAC, webhook, CRD, and other resources produced by the current default Helm and Kustomize installations are built into
+the script. If `charts/tensor-fusion` or `config/default` exists next to the script, it additionally
+runs one compatibility cleanup based on the local manifests; these two directories are not required for a single-file uninstall.

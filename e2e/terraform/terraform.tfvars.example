@@ -6,7 +6,7 @@
 # region      = "us-west-2"
 # aws_profile = null           # null = use AWS_PROFILE / the ambient credential chain
 
-# --- versions (see README 版本选择与依据) ------------------------------------------
+# --- versions (see README, "Version choices and rationale") ------------------------------------------
 # kubernetes_version = "1.36"
 # karpenter_version  = "1.14.1"
 

@@ -186,7 +186,7 @@ func gpuVRAMSlice(g GPU) float64 {
 
 var _ = Describe("isolation", func() {
 	Register(Case{
-		ID: "ISO-02", Title: "soft 算力限额实测：吞吐随 share 成比例、无停顿", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
+		ID: "ISO-02", Title: "soft compute limit, measured: throughput proportional to the share, no stalls", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -204,7 +204,7 @@ var _ = Describe("isolation", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-03", Title: "显存上限实测：容器内只见配额、超限分配失败、邻居不受影响", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
+		ID: "ISO-03", Title: "VRAM cap, measured: the container sees only its quota, allocation beyond the limit fails, neighbors are unaffected", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -243,7 +243,7 @@ var _ = Describe("isolation", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-04", Title: "hard 算力限额实测（sidecar worker）", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
+		ID: "ISO-04", Title: "hard compute limit, measured (sidecar worker)", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
 		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -260,7 +260,7 @@ var _ = Describe("isolation", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-15", Title: "邻居隔离：吵闹的 Pod 不会把安静的 Pod 压到份额以下", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 45 * time.Minute,
+		ID: "ISO-15", Title: "Neighbor isolation: a noisy Pod does not push a quiet Pod below its share", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 45 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -291,7 +291,7 @@ var _ = Describe("isolation", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-16", Title: "运行期调整限额生效（cron 伸缩规则，即 ASC-02）", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
+		ID: "ISO-16", Title: "Changing the limit at runtime takes effect (cron scaling rule, i.e. ASC-02)", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -359,7 +359,7 @@ spec:
 	})
 
 	Register(Case{
-		ID: "ISO-13", Title: "disable-features: gpu-limiter 关闭限流后不再受限", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
+		ID: "ISO-13", Title: "disable-features: gpu-limiter turns throttling off and the workload is no longer limited", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
 		KnownIssue: "under soft isolation the annotation is ignored: the webhook only turns disable-features into environment variables on the remote / hard client path (compose_client.go), the soft branch returns before it, so a 30 % limit still throttles to 27 % (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -385,7 +385,7 @@ spec:
 
 var _ = Describe("observability", func() {
 	Register(Case{
-		ID: "OBS-02", Title: "GPU / worker / 节点 / pool 指标在限定时间内写入 GreptimeDB", Tiers: []string{TierCore, TierRehearsal},
+		ID: "OBS-02", Title: "GPU / worker / node / pool metrics are written to GreptimeDB within the time limit", Tiers: []string{TierCore, TierRehearsal},
 		Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
 		KnownIssue: "released images (<= 2.17.23): hypervisor metrics never reach GreptimeDB in a default install (metrics file written outside the vector-tailed directory), so tf_gpu_usage / tf_worker_usage stay empty; the tables feed the usage alerts, the autoscaler and the cloud console charts. Needs the fixed operator / hypervisor images and chart",
 		Run: func(ctx SpecContext, c *C) {
@@ -431,7 +431,7 @@ var _ = Describe("observability", func() {
 
 var _ = Describe("perf", func() {
 	Register(Case{
-		ID: "PERF-LLM-01", Title: "vLLM 流式推理 vs 算力份额（soft）：吞吐成比例、TTFT / TPOT 尾延迟无断崖", Tiers: []string{TierPerf, "perf-quick"},
+		ID: "PERF-LLM-01", Title: "vLLM streaming inference vs. compute share (soft): throughput proportional, no cliff in TTFT / TPOT tail latency", Tiers: []string{TierPerf, "perf-quick"},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -449,7 +449,7 @@ var _ = Describe("perf", func() {
 	})
 
 	Register(Case{
-		ID: "PERF-CO-01", Title: "切分 + 共调度：两个 vLLM 实例各占 50% 同卡并发，各自的吞吐与尾延迟、合计吞吐", Tiers: []string{TierPerf, "perf-quick"},
+		ID: "PERF-CO-01", Title: "Fractional sharing + co-scheduling: two vLLM instances at 50% each, concurrent on the same GPU; throughput and tail latency of each, and combined throughput", Tiers: []string{TierPerf, "perf-quick"},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -514,7 +514,7 @@ var _ = Describe("perf", func() {
 	})
 
 	Register(Case{
-		ID: "PERF-LLM-02", Title: "vLLM 流式推理 vs 算力份额（hard）", Tiers: []string{TierPerf, "perf-quick"},
+		ID: "PERF-LLM-02", Title: "vLLM streaming inference vs. compute share (hard)", Tiers: []string{TierPerf, "perf-quick"},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
 		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
@@ -535,7 +535,7 @@ var _ = Describe("perf", func() {
 	})
 
 	Register(Case{
-		ID: "PERF-LLM-03", Title: "vLLM 变体：VRAM 限额松 / 紧、eager（无 CUDA graph）、整卡 shared", Tiers: []string{TierPerf},
+		ID: "PERF-LLM-03", Title: "vLLM variants: VRAM limit loose / tight, eager (no CUDA graph), whole-GPU shared", Tiers: []string{TierPerf},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -600,7 +600,7 @@ var _ = Describe("perf", func() {
 			},
 		})
 	}
-	benchCase("PERF-ORT-01", "ONNX Runtime (CUDA EP)：CNN / 编码器 / 语音编码器的 QPS 与延迟分位 vs 份额", true,
+	benchCase("PERF-ORT-01", "ONNX Runtime (CUDA EP): QPS and latency percentiles of a CNN / encoder / speech encoder vs. share", true,
 		func(prof perfProfile, vram float64) (string, string, time.Duration) {
 			models := "resnet50,minilm"
 			if prof.Name == "full" {
@@ -608,7 +608,7 @@ var _ = Describe("perf", func() {
 			}
 			return "onnxruntime", ortCommand(models, prof.Warmup, prof.Window*0.75, vram), 40 * time.Minute
 		})
-	benchCase("PERF-TB-01", "TorchBench 代表性子集（conv / transformer / 小 kernel 密集）vs 份额", true,
+	benchCase("PERF-TB-01", "Representative TorchBench subset (conv / transformer / small-kernel-heavy) vs. share", true,
 		func(prof perfProfile, vram float64) (string, string, time.Duration) {
 			models, tests := "resnet50,bert_base,tiny_mlp", "eval"
 			if prof.Name == "full" {
@@ -616,7 +616,7 @@ var _ = Describe("perf", func() {
 			}
 			return "torchbench-mini", torchCommand(models, tests, 5, prof.Window*0.5, vram), 60 * time.Minute
 		})
-	benchCase("PERF-MLP-01", "MLPerf Inference 风格（LoadGen Offline / Server，缩减时长，非合规提交）vs 份额", true,
+	benchCase("PERF-MLP-01", "MLPerf Inference style (LoadGen Offline / Server, shortened duration, not a compliant submission) vs. share", true,
 		func(prof perfProfile, vram float64) (string, string, time.Duration) {
 			models, scenarios := "resnet50", "Offline"
 			if prof.Name == "full" {
@@ -626,7 +626,7 @@ var _ = Describe("perf", func() {
 		})
 
 	Register(Case{
-		ID: "PERF-PW-01", Title: "成对正交设计：模式 × 份额 × 负载 × 邻居 × VRAM 的主效应", Tiers: []string{TierPerf},
+		ID: "PERF-PW-01", Title: "Pairwise orthogonal design: main effects of mode × share × load × neighbor × VRAM", Tiers: []string{TierPerf},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 240 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)

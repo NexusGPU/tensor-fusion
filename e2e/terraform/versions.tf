@@ -13,7 +13,7 @@ terraform {
   }
 
   # Local state by default: this is a throwaway stack. To share state, add a
-  # backend block here (see README "远程 state").
+  # backend block here (see README "Remote state").
 }
 
 provider "aws" {

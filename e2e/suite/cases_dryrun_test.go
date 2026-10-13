@@ -51,7 +51,7 @@ func (e *Env) setStandinShare(ctx context.Context, c *C, pod string, share float
 
 var _ = Describe("dry run", func() {
 	Register(Case{
-		ID: "DRY-PERF-01", Title: "LLM 测量与判定流水线（CPU stand-in）：比例达标能通过，停顿 / 双峰 / 不限流能被判出",
+		ID: "DRY-PERF-01", Title: "LLM measurement and judging pipeline (CPU stand-in): a proportional result passes; stalls / bimodality / no throttling are detected",
 		Tiers: []string{TierDryRun}, Mode: ModeDryRun, Timeout: 25 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			prof := perfProfile{Name: "dry", Warmup: 4, Window: 16, Concurrency: 8, MaxTokens: 48}
@@ -122,7 +122,7 @@ var _ = Describe("dry run", func() {
 	})
 
 	Register(Case{
-		ID: "DRY-PERF-02", Title: "ONNX Runtime / TorchBench-mini / MLPerf-LoadGen 脚本在 CPU 上跑通（导出、会话、测量、结果解析）",
+		ID: "DRY-PERF-02", Title: "ONNX Runtime / TorchBench-mini / MLPerf-LoadGen scripts run end to end on CPU (export, session, measurement, result parsing)",
 		Tiers: []string{TierDryRun}, Mode: ModeDryRun, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			env.shipWorkloads(ctx, c.NS)
@@ -155,7 +155,7 @@ var _ = Describe("dry run", func() {
 	})
 
 	Register(Case{
-		ID: "DRY-ISO-01", Title: "GPU 档位的全部清单通过 server-side dry-run（准入、CRD 校验、镜像字段）",
+		ID: "DRY-ISO-01", Title: "All manifests of the GPU tiers pass server-side dry-run (admission, CRD validation, image fields)",
 		Tiers: []string{TierDryRun}, Mode: ModeDryRun, Needs: []string{NeedTF}, Timeout: 10 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			env.shipWorkloads(ctx, c.NS)
@@ -189,7 +189,7 @@ var _ = Describe("dry run", func() {
 	})
 
 	Register(Case{
-		ID: "DRY-IMG-01", Title: "GPU 档位用到的镜像与模型可解析（只查 manifest / HEAD，不拉取）",
+		ID: "DRY-IMG-01", Title: "Images and models used by the GPU tiers resolve (manifest / HEAD only, nothing is pulled)",
 		Tiers: []string{TierDryRun}, Mode: ModeDryRun, NoNS: true, Timeout: 10 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			images := []string{env.Images.Torch, env.Images.VLLM, env.Images.Curl, env.Images.Busybox}

@@ -161,7 +161,7 @@ func pathBNodeClassRef() map[string]any {
 
 var _ = Describe("karpenter path B", func() {
 	Register(Case{
-		ID: "KRP-B02", Title: "路径 B：容量水位 → GPUNodeClaim → 同名 NodeClaim → 节点 → Bound（含 B01 连接检查、B09 删除 Pool 清理）",
+		ID: "KRP-B02", Title: "Path B: capacity watermark → GPUNodeClaim → NodeClaim of the same name → node → Bound (includes the B01 connection check and the B09 cleanup on Pool deletion)",
 		Tiers: []string{TierKarpenter, TierDryRun, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 40 * time.Minute,
 		KnownIssue: "<= 2.17.23: provisioningMode=Karpenter pools never reconcile (pricing provider not initialised). 2.17.24 - 2.17.27: the GPUNodeClaim and (given a chart whose ClusterRole lets the operator read the NodeClass, >= 1.8.9) the NodeClaim and the node appear, but the node controller matches nodes to pools by node selector only, so the node of a pool without one gets no GPUNode, no hypervisor, and the claim never becomes Bound; and a deleted pool leaves its GPUNodeClaim behind",
 		Run: func(ctx SpecContext, c *C) {
@@ -270,7 +270,7 @@ var _ = Describe("karpenter path B", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-B10", Title: "路径 B：删除 Pool 后 GPUNodeClaim / NodeClaim / 节点 / GPUNode / GPU 全部回收（接在 KRP-B02 之后）",
+		ID: "KRP-B10", Title: "Path B: after the Pool is deleted, the GPUNodeClaim / NodeClaim / node / GPUNode / GPU are all reclaimed (runs after KRP-B02)",
 		Tiers: []string{TierKarpenter, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 15 * time.Minute, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			if pathBCleanupSeconds == 0 {

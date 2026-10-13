@@ -1,36 +1,36 @@
-# ACK 环境手工测试用例
+# Manual test cases for the ACK environment
 
-在 `e2e/ack` 拉起的阿里云 ACK 集群上，手工把关键功能走一遍。每条用例给出：目的、命令、在 cloud app（app.tensor-fusion.ai）上看什么、预期结果。命令可以整段复制执行。自动化套件里对应的用例 ID 写在标题后面，想直接跑自动化版本用 `make ack-test TIER=<档位> FOCUS='<ID>'`。
+Walk through the key features by hand on the Alibaba Cloud ACK cluster brought up by `e2e/ack`. Each case gives: the purpose, the commands, what to look at in the cloud app (app.tensor-fusion.ai), and the expected result. The commands can be copied and run as whole blocks. The IDs of the corresponding cases in the automated suite are given after each title; to run the automated version directly, use `make ack-test TIER=<tier> FOCUS='<ID>'`.
 
-约定：
+Conventions:
 
-- 在仓库的 `e2e/` 目录下执行；`T4` 指 `ecs.gn6i-c4g1.xlarge` 上的 Tesla T4（产品表里 65 TFLOPS / 15Gi）。
-- GPU 节点全部由 Karpenter 拉起，空闲 2 分钟后回收。第一条需要 GPU 的用例要等 4–5 分钟（实例启动 + ACK 装驱动），之后只要节点还在就是秒级。
-- 每条用例用自己的 namespace，结尾的 `kubectl delete ns` 就是清理。
+- Run from the repository's `e2e/` directory; `T4` means the Tesla T4 on `ecs.gn6i-c4g1.xlarge` (65 TFLOPS / 15Gi in the product table).
+- All GPU nodes are launched by Karpenter and reclaimed after 2 minutes idle. The first case that needs a GPU waits 4–5 minutes (instance boot + ACK installing the driver); after that it takes seconds as long as the node is still there.
+- Each case uses its own namespace, and the `kubectl delete ns` at the end is the cleanup.
 
-## 0. 准备
+## 0. Preparation
 
 ```bash
 cd e2e
-export KUBECONFIG=$PWD/ack/.work/kubeconfig     # 集群不在时先 make ack-up（约 10 分钟）
+export KUBECONFIG=$PWD/ack/.work/kubeconfig     # if the cluster is not there, run make ack-up first (about 10 minutes)
 alias k=kubectl
 
 k get nodes -L e2e.tensor-fusion.ai/role,node.kubernetes.io/instance-type
 k -n tensor-fusion-sys get pods
 k get tensorfusioncluster,gpupool,nodepool,ecsnodeclass,nodeoverlay
-k -n tensor-fusion-sys logs deploy/tensor-fusion-sys-controller -c cluster-agent --tail=3   # 应有 Connected to cloud.
+k -n tensor-fusion-sys logs deploy/tensor-fusion-sys-controller -c cluster-agent --tail=3   # should show Connected to cloud.
 ```
 
-预期：1 台 `system` 节点 Ready；controller Pod 3/3；NodePool `tf-gpu`、`tf-cpu` 与两个 ECSNodeClass 都是 Ready；NodeOverlay `tensor-fusion-overlay` Ready。
+Expected: 1 `system` node Ready; the controller Pod 3/3; NodePools `tf-gpu` and `tf-cpu` and both ECSNodeClasses Ready; NodeOverlay `tensor-fusion-overlay` Ready.
 
-cloud app：用环境所属组织的管理员账号登录，环境列表里的 `ack-us-east-1` 显示已连接。之后每条用例创建的节点、GPU、workload 都应在这个环境下出现。
+cloud app: log in with an administrator account of the organization that owns the environment; `ack-us-east-1` shows as connected in the environment list. The nodes, GPUs and workloads created by every later case should appear under this environment.
 
-所有负载脚本放进一个 ConfigMap，后面的用例直接挂载：
+Put all workload scripts into one ConfigMap, which the later cases mount directly:
 
 ```bash
 scripts() { k -n "$1" create configmap e2e-scripts --from-file=suite/workloads --dry-run=client -o yaml | k apply -f - >/dev/null; }
 
-# tfpod <ns> <名字> <隔离模式> <算力百分比> <显存> <容器命令>
+# tfpod <ns> <name> <isolation mode> <compute percent> <VRAM> <container command>
 tfpod() {
 cat <<YAML | k apply -f -
 apiVersion: v1
@@ -58,34 +58,34 @@ YAML
 }
 ```
 
-## 1. Karpenter 冷启动：从 0 台 GPU 节点到 Pod 运行（KRP-A08、INS-03）
+## 1. Karpenter cold start: from 0 GPU nodes to a running Pod (KRP-A08, INS-03)
 
-目的：只加 label 和注解的 Pod 让 Karpenter 从 `tf-gpu` NodePool 拉起节点，节点被 TensorFusion 纳管、GPU 被发现。
+Purpose: a Pod with only the label and annotations makes Karpenter launch a node from the `tf-gpu` NodePool; the node is managed by TensorFusion and its GPU is discovered.
 
 ```bash
-k get nodeclaim                      # 起点：没有 tf-gpu 的 NodeClaim
+k get nodeclaim                      # starting point: no tf-gpu NodeClaim
 k create ns t1 && scripts t1
 date; tfpod t1 cold soft 20 2Gi "python3 /e2e/gpu_probe.py info && sleep 600"
 
 watch -n 5 'kubectl get nodeclaim; kubectl get gpunode,gpu; kubectl -n t1 get pod -o wide'
 ```
 
-预期，按时间顺序：
+Expected, in chronological order:
 
-1. 约 10 秒内出现 **恰好 1 个** `tf-gpu-*` NodeClaim（机型 `ecs.gn6i-c4g1.xlarge`）。出现第 2、3 个说明 Karpenter 用的不是打过补丁的镜像（见 README 的「provider 补丁」）。
-2. 约 4–5 分钟后节点 Ready，随后出现 `hypervisor-<节点名>` Pod、GPUNode（Running）和 1 个 GPU（`Tesla T4`，65 TFLOPS / 15Gi，Running）。
-3. Pod `cold` Running，`kubectl -n t1 logs cold` 的 RESULT 行里 `cuda_available: true`、`device_count: 1`，容器内 `nvidia-smi` 看到的总显存是 2048 MiB（配额），不是整卡。
+1. Within about 10 seconds **exactly 1** `tf-gpu-*` NodeClaim appears (instance type `ecs.gn6i-c4g1.xlarge`). A 2nd or 3rd one means Karpenter is not using the patched image (see "provider patch" in the README).
+2. After about 4–5 minutes the node is Ready, followed by the `hypervisor-<node name>` Pod, the GPUNode (Running) and 1 GPU (`Tesla T4`, 65 TFLOPS / 15Gi, Running).
+3. Pod `cold` is Running; the RESULT line of `kubectl -n t1 logs cold` has `cuda_available: true` and `device_count: 1`, and the total VRAM that `nvidia-smi` sees inside the container is 2048 MiB (the quota), not the whole GPU.
 
 ```bash
 k get node -l e2e.tensor-fusion.ai/role=gpu -o json | jq '.items[0].status.capacity | with_entries(select(.key|test("index_0|nvidia")))'
 k -n t1 get pod cold -o json | jq '.metadata.annotations | with_entries(select(.key|test("gpu-ids|tflops|vram")))'
 ```
 
-cloud app：环境下出现 1 个节点、1 张 T4，分配量 13 TFLOPS / 2Gi；workload `cold` 在列表里。
+cloud app: 1 node and 1 T4 appear under the environment, with 13 TFLOPS / 2Gi allocated; workload `cold` is in the list.
 
-清理：`k delete ns t1`。节点空闲 2 分钟后被 Karpenter 回收（用例 7 专门看这一步）。接着做用例 2–5 的话不用等，节点会被复用。
+Cleanup: `k delete ns t1`. The node is reclaimed by Karpenter after 2 minutes idle (case 7 looks at this step specifically). If you continue with cases 2–5 there is no need to wait; the node is reused.
 
-## 2. 切分：一张卡跑三个 Pod（ISO-01）
+## 2. Fractional sharing: three Pods on one GPU (ISO-01)
 
 ```bash
 k create ns t2 && scripts t2
@@ -95,13 +95,13 @@ k -n t2 get pod -o json | jq -r '.items[] | [.metadata.name, .spec.nodeName, .me
 k get gpu -o json | jq '.items[] | {capacity: .status.capacity, available: .status.available, apps: [.status.runningApps[]?.name]}'
 ```
 
-预期：三个 Pod 的 `gpu-ids` 相同；GPU 的 `available` 是 26 TFLOPS / 9Gi（65 − 3×13，15 − 3×2），几秒内到位；每个容器里 `nvidia-smi` 的总显存是 2048 MiB。
+Expected: the three Pods have the same `gpu-ids`; the GPU's `available` is 26 TFLOPS / 9Gi (65 − 3×13, 15 − 3×2), reached within a few seconds; the total VRAM from `nvidia-smi` in each container is 2048 MiB.
 
-cloud app：这张 GPU 上显示 3 个 workload，已分配约 60% 算力、40% 显存。
+cloud app: this GPU shows 3 workloads, with about 60% of compute and 40% of VRAM allocated.
 
-清理：`k delete ns t2`，然后 `k get gpu` 的 `available` 回到 65 / 15Gi。
+Cleanup: `k delete ns t2`, after which `available` in `k get gpu` returns to 65 / 15Gi.
 
-## 3. 显存上限（ISO-03 的 soft 部分）
+## 3. VRAM cap (the soft part of ISO-03)
 
 ```bash
 k create ns t3 && scripts t3
@@ -109,13 +109,13 @@ tfpod t3 vram soft 20 4Gi "python3 /e2e/gpu_probe.py vram --target-mib 6144"
 k -n t3 wait pod vram --for=jsonpath='{.status.phase}'=Succeeded --timeout=600s; k -n t3 logs vram | grep RESULT
 ```
 
-预期：RESULT 里实际分配到约 3840 MiB 后失败（`oom: true`），`total_mib` 是 4096。申请 6 GiB 拿不到，容器看到的就是配额。
+Expected: in RESULT the allocation fails after about 3840 MiB has actually been allocated (`oom: true`), and `total_mib` is 4096. A request for 6 GiB cannot be satisfied, and what the container sees is the quota.
 
-清理：`k delete ns t3`。
+Cleanup: `k delete ns t3`.
 
-## 4. 算力限额：soft 模式的实际行为（ISO-02）
+## 4. Compute limit: actual behavior in soft mode (ISO-02)
 
-目的：看限额是否生效，以及「偏松」的幅度。soft 限流控制的是 GPU 忙时比例（NVML 利用率），不是吞吐本身，所以两个都要看。
+Purpose: see whether the limit takes effect and how far on the loose side it is. soft throttling controls the GPU busy-time fraction (NVML utilization), not throughput itself, so both have to be looked at.
 
 ```bash
 k create ns t4 && scripts t4
@@ -127,48 +127,48 @@ for p in 100 50 25; do
 done
 ```
 
-设备侧的读数（每分钟一行，来自 hypervisor 遥测）：
+Device-side readings (one row per minute, from hypervisor telemetry):
 
 ```bash
 sql() { k get --raw "/api/v1/namespaces/greptimedb/services/greptimedb-standalone:4000/proxy/v1/sql?db=public&sql=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))' "$1")" | jq -c '.output[0].records.rows[]'; }
 sql "select greptime_timestamp, compute_percentage, compute_tflops, power_usage, temperature from tf_gpu_usage order by greptime_timestamp desc limit 12"
 ```
 
-预期（T4 实测，见 TEST-SUMMARY.md）：
+Expected (measured on the T4, see TEST-SUMMARY.md):
 
-| 限额 | 吞吐相对 100% | 设备利用率 | 判定 |
+| Limit | Throughput relative to 100% | Device utilization | Verdict |
 |---|---|---|---|
-| 100% | 1.00 | 约 97% | — |
-| 50% | 约 0.80 | 约 56% | 利用率在份额 +10 个点以内；吞吐不低于份额的 85% |
-| 25% | 约 0.22–0.24 | 约 25–30% | 同上 |
+| 100% | 1.00 | about 97% | — |
+| 50% | about 0.80 | about 56% | Utilization within share + 10 points; throughput not lower than 85% of the share |
+| 25% | about 0.22–0.24 | about 25–30% | Same as above |
 
-50% 档吞吐高于 50% 是预期内的：T4 在间歇负载下每毫秒完成的计算多于持续满载。不允许的是低于份额（把应用限得太紧），以及出现 ≥0.4 秒的停顿。
+Throughput above 50% at the 50% setting is expected: under an intermittent load a T4 completes more computation per millisecond than under sustained full load. What is not allowed is falling below the share (limiting the application too tightly) or stalls ≥0.4 seconds.
 
-cloud app：GPU 的利用率曲线在三段负载期间依次是约 97%、56%、25–30%。
+cloud app: the GPU's utilization curve is about 97%, 56% and 25–30% in turn during the three load segments.
 
-清理：`k delete ns t4`。
+Cleanup: `k delete ns t4`.
 
-## 5. 共调度：两个 LLM 租户各占 50%（PERF-CO-01）
+## 5. Co-scheduling: two LLM tenants at 50% each (PERF-CO-01)
 
-这是切分 + 共调度的核心场景，建议直接跑自动化用例，它会起两个 vLLM、同时压测并出判定：
+This is the core scenario for fractional sharing + co-scheduling. Running the automated case directly is recommended; it starts two vLLM instances, load-tests them at the same time and produces the verdict:
 
 ```bash
 make ack-test TIER=perf-quick FOCUS='PERF-CO-01'
-python3 tools/perf_history.py record --version <版本> --env ack-us-east-1-t4 results/<run-id>   # 可选：留档
+python3 tools/perf_history.py record --version <version> --env ack-us-east-1-t4 results/<run-id>   # optional: record it in the history
 open perf-history/index.html
 ```
 
-预期：两个租户落在同一张 GPU；合计吞吐不低于独占整卡的 70%；两个租户的吞吐之比不低于 0.7；没有 ≥0.9 秒的 token 间隔。实际数字见 TEST-SUMMARY.md 与查看器的「切分 + 共调度」一节。
+Expected: the two tenants land on the same GPU; combined throughput is not lower than 70% of the whole GPU alone; the ratio of the two tenants' throughput is not lower than 0.7; there are no inter-token gaps ≥0.9 seconds. The actual numbers are in TEST-SUMMARY.md and in the "Fractional sharing + co-scheduling" section of the viewer.
 
-手工观察：用例运行期间 `k get pods -A | grep vllm-co`，以及 cloud app 上这张 GPU 同时挂着两个 workload、利用率接近 100%。
+Manual observation: while the case is running, `k get pods -A | grep vllm-co`, and in the cloud app this GPU carries two workloads at the same time with utilization close to 100%.
 
-## 6. 兼容模式扩容：GPU 不足时由 TensorFusion 扩容器建 NodeClaim（KRP-A02、KRP-A03）
+## 6. Compatibility-mode scale-up: the TensorFusion expander creates a NodeClaim when GPU is short (KRP-A02, KRP-A03)
 
-目的：验证「AutoSelect + Karpenter NodePool」的核心闭环。先占满现有 GPU，再来一个 Pod。
+Purpose: verify the core loop of "AutoSelect + Karpenter NodePool". First fill the existing GPUs, then add one more Pod.
 
 ```bash
 k create ns t6 && scripts t6
-# 占满现有的每一张卡（整卡 shared）
+# fill every existing GPU (whole-GPU shared)
 n=$(k get gpu --no-headers | wc -l | tr -d ' '); [ "$n" -gt 0 ] || n=1
 for i in $(seq 1 $n); do
 cat <<YAML | k apply -f -
@@ -190,66 +190,66 @@ tfpod t6 extra soft 20 2Gi "sleep 600"
 watch -n 5 'kubectl get nodeclaim -o wide; kubectl -n t6 get pod extra -o wide; kubectl get events -n t6 --field-selector involvedObject.name=extra | tail -5'
 ```
 
-预期：
+Expected:
 
-1. `extra` 先 Pending，事件里有 `GPUQuotaOrCapacityNotEnough`。
-2. 十几秒内新增 **恰好 1 个** NodeClaim，名字是 `tensor-fusion-<10 位>`（扩容器建的，不是 Karpenter 的 `tf-gpu-*`），带 label `karpenter.sh/nodepool=tf-gpu` 和注解 `tensor-fusion.ai/expansion-source`，不带 `karpenter.sh/do-not-disrupt`：
+1. `extra` is Pending first, with `GPUQuotaOrCapacityNotEnough` in its events.
+2. Within ten-odd seconds **exactly 1** new NodeClaim is added, named `tensor-fusion-<10 characters>` (created by the expander, not Karpenter's `tf-gpu-*`), with the label `karpenter.sh/nodepool=tf-gpu` and the annotation `tensor-fusion.ai/expansion-source`, and without `karpenter.sh/do-not-disrupt`:
    ```bash
    k get nodeclaim -o json | jq '.items[] | {name: .metadata.name, pool: .metadata.labels["karpenter.sh/nodepool"], src: .metadata.annotations["tensor-fusion.ai/expansion-source"]}'
    k get --raw /api/v1/namespaces/tensor-fusion-sys/services/tensor-fusion-sys:8080/proxy/api/node-scaler | jq .
    ```
-3. 新节点 GPU 变为 Running 后，`extra` 在 30 秒内被绑定并 Running（2.17.24 之前这里要等 5 分钟）。
+3. After the GPU on the new node becomes Running, `extra` is bound and Running within 30 seconds (before 2.17.24 this took a 5-minute wait).
 
-一次扩容接住多个 Pod（KRP-A03）：再起三个 20% 的 Pod，它们应落在同一个新节点、同一张卡，不再新增 NodeClaim。
+One scale-up serving several Pods (KRP-A03): start three more Pods at 20%; they should land on the same new node and the same GPU, with no further NodeClaim added.
 
-cloud app：节点数 +1，新节点上出现 `extra`。
+cloud app: node count +1, and `extra` appears on the new node.
 
-清理：`k delete ns t6`。
+Cleanup: `k delete ns t6`.
 
-## 7. 缩容：负载清空后节点被回收（KRP-A09）
+## 7. Scale-down: the node is reclaimed after the workloads are gone (KRP-A09)
 
-接在任何一条用了 GPU 的用例之后，删掉 namespace 即开始计时：
+Run this after any case that used a GPU; timing starts when the namespace is deleted:
 
 ```bash
 date; watch -n 10 'kubectl get nodeclaim; kubectl get gpunode,gpu; kubectl get node -l e2e.tensor-fusion.ai/role=gpu'
 ```
 
-预期：`consolidateAfter=2m` 到点后 NodeClaim 进入删除，Node、GPUNode、GPU 一并消失；ECS 实例被释放：
+Expected: when `consolidateAfter=2m` elapses the NodeClaim enters deletion, and the Node, GPUNode and GPU disappear with it; the ECS instance is released:
 
 ```bash
 aliyun ecs DescribeInstances --RegionId us-east-1 --Tag.1.Key Project --Tag.1.Value tf-e2e-ack | jq -r '.Instances.Instance[] | [.InstanceId,.InstanceType,.Status] | @tsv'
 ```
 
-只剩 system 节点那一台。cloud app：节点和 GPU 从环境里消失。
+Only the system node's instance is left. cloud app: the node and the GPU disappear from the environment.
 
-## 8. 路径 B：`provisioningMode: Karpenter`，由容量水位驱动（KRP-B02、KRP-B10）
+## 8. Path B: `provisioningMode: Karpenter`, driven by the capacity watermark (KRP-B02, KRP-B10)
 
-自动化用例会往 TensorFusionCluster 里加一个 `provisioningMode: Karpenter` 的 pool、等它拉起节点、调度一个 Pod 上去、再删掉 pool 并检查没有残留。手工做这件事要改 TensorFusionCluster，建议直接跑：
+The automated case adds a pool with `provisioningMode: Karpenter` to the TensorFusionCluster, waits for it to launch a node, schedules a Pod onto it, then deletes the pool and checks that nothing is left behind. Doing this by hand means editing the TensorFusionCluster, so running the automated case directly is recommended:
 
 ```bash
 make ack-test TIER=karpenter-finops FOCUS='KRP-B02|KRP-B10'
 ```
 
-运行期间手工观察：
+Observe by hand while it runs:
 
 ```bash
 watch -n 5 'kubectl get gpupool; kubectl get gpunodeclaim; kubectl get nodeclaim -o wide; kubectl get gpunode,gpu'
 ```
 
-预期：pool `tensor-fusion-karp` 出现 → 1 个 GPUNodeClaim（机型 `ecs.gn6i-c8g1.2xlarge`，带 `tensor-fusion.ai/hourly-pricing` 注解）→ 同名 NodeClaim（owner 是 GPUNodeClaim，带 `karpenter.sh/do-not-disrupt`，请求 `nvidia.com/gpu: 1`）→ 节点 → GPUNodeClaim `Bound` → 指定该 pool 的 Pod 落在这台节点；30 秒内不出现第二个 GPUNodeClaim；删 pool 后 GPUPool、GPUNodeClaim、NodeClaim、节点、GPUNode、GPU 全部消失。
+Expected: pool `tensor-fusion-karp` appears → 1 GPUNodeClaim (instance type `ecs.gn6i-c8g1.2xlarge`, with the `tensor-fusion.ai/hourly-pricing` annotation) → a NodeClaim of the same name (owned by the GPUNodeClaim, with `karpenter.sh/do-not-disrupt`, requesting `nvidia.com/gpu: 1`) → node → GPUNodeClaim `Bound` → the Pod targeting that pool lands on this node; no second GPUNodeClaim appears within 30 seconds; after the pool is deleted, the GPUPool, GPUNodeClaim, NodeClaim, node, GPUNode and GPU all disappear.
 
-需要带阿里云机型目录的 operator（≥ 包含 #820 的版本）；更早的版本在这里选不出任何机型。
+This needs an operator with the Alibaba Cloud instance catalog (≥ a version that includes #820); earlier versions cannot select any instance type here.
 
-## 9. FinOps：分片与整卡的节点数对比（FIN-01）
+## 9. FinOps: node count of fractional vs. whole-GPU workloads (FIN-01)
 
 ```bash
 make ack-test TIER=karpenter-finops FOCUS='FIN-01'
 cat results/<run-id>/FIN-01.finops.json | jq .
 ```
 
-预期：3 个 20% 的分片负载只用 1 台节点，3 个整卡负载用 3 台；输出两种方案的节点小时、按量成本（单价取自 `pricing/alibaba-us-east-1.json`）和节省比例。cloud app 的成本视图里同一时间段应能看到节点数的差别。
+Expected: 3 fractional workloads at 20% use only 1 node, and 3 whole-GPU workloads use 3; the output gives the node-hours, the on-demand cost (unit prices from `pricing/alibaba-us-east-1.json`) and the savings ratio of the two options. The difference in node count should be visible for the same time range in the cost view of the cloud app.
 
-## 10. 恢复：hypervisor 重启、operator 重启、节点被删（NLC-01、NLC-02、NLC-09）
+## 10. Recovery: hypervisor restart, operator restart, node deleted (NLC-01, NLC-02, NLC-09)
 
 ```bash
 k create ns t10 && scripts t10
@@ -257,23 +257,23 @@ tfpod t10 app soft 20 2Gi "sleep 1800"
 k -n t10 wait pod app --for=condition=Ready --timeout=900s
 node=$(k -n t10 get pod app -o jsonpath='{.spec.nodeName}'); k get gpu -o json | jq '.items[].status.available'
 
-# hypervisor 重启
+# hypervisor restart
 k -n tensor-fusion-sys delete pod hypervisor-$node; date
 watch -n 3 "kubectl -n tensor-fusion-sys get pod hypervisor-$node; kubectl get gpu; kubectl -n t10 get pod app"
 ```
 
-预期：新的 hypervisor 约 20 秒内 Ready，期间 GPU 短暂变 `Pending` 再回到 `Running`；`app` 不重启；`available` 前后一致（52 TFLOPS / 13Gi）。
+Expected: the new hypervisor is Ready within about 20 seconds, during which the GPU briefly goes `Pending` and then returns to `Running`; `app` does not restart; `available` is the same before and after (52 TFLOPS / 13Gi).
 
 ```bash
-# operator 重启
+# operator restart
 k get --raw /api/v1/namespaces/tensor-fusion-sys/services/tensor-fusion-sys:8080/proxy/api/allocation | jq '.allocation | keys'
 k -n tensor-fusion-sys rollout restart deploy/tensor-fusion-sys-controller && k -n tensor-fusion-sys rollout status deploy/tensor-fusion-sys-controller
 k get --raw /api/v1/namespaces/tensor-fusion-sys/services/tensor-fusion-sys:8080/proxy/api/allocation | jq '.allocation | keys'
 ```
 
-预期：两次的 key 集合相同；重启后再起一个 60% 的 Pod 加上已有的 20% 仍能放进同一张卡，再起第二个 60% 的不会落到这张卡。
+Expected: the two key sets are identical; after the restart, one more Pod at 60% still fits on the same GPU together with the existing 20%, and a second Pod at 60% does not land on this GPU.
 
-节点被删（用 Deployment 才会重建）：
+Node deleted (the Pod is only re-created when it belongs to a Deployment):
 
 ```bash
 k -n t10 delete pod app
@@ -297,25 +297,25 @@ node=$(k -n t10 get pod -l app=web -o jsonpath='{.items[0].spec.nodeName}'); k d
 watch -n 5 'kubectl get nodeclaim; kubectl get gpunode,gpu; kubectl -n t10 get pod -o wide'
 ```
 
-预期：被删节点的 GPUNode、GPU 几秒内清理；Deployment 的新 Pod 先 Pending，随后在另一台（已有或新拉起的）GPU 节点上 Running。
+Expected: the GPUNode and GPU of the deleted node are cleaned up within a few seconds; the Deployment's new Pod is Pending first and then Running on another GPU node (existing or newly launched).
 
-cloud app：重启期间环境保持在线（operator 重启时 agent 会短暂重连）；删节点后节点列表随之变化。
+cloud app: the environment stays online during the restarts (the agent briefly reconnects when the operator restarts); after the node is deleted the node list changes accordingly.
 
-清理：`k delete ns t10`。
+Cleanup: `k delete ns t10`.
 
-## 11. 配额、Gang、按型号调度（SCH-10、SCH-11、SCH-04）
+## 11. Quota, Gang, scheduling by model (SCH-10, SCH-11, SCH-04)
 
-这三条在自动化里各十几到几十秒，直接跑并读结果：
+Each of these three takes between ten-odd seconds and a few tens of seconds in the automated suite; run them directly and read the results:
 
 ```bash
 make ack-test TIER=core FOCUS='SCH-10|SCH-11|SCH-04'
 ```
 
-预期：超出 `GPUResourceQuota` 的 Pod 保持 Pending 且事件含 quota；Gang 的两个成员一起 Running；写了不存在型号的 Pod 一直 Pending 且不触发扩容。
+Expected: a Pod exceeding the `GPUResourceQuota` stays Pending and its events mention quota; the two Gang members become Running together; a Pod that names a model that does not exist stays Pending and does not trigger a scale-up.
 
-## 12. 指标与控制台（OBS-02、CLD-01）
+## 12. Metrics and console (OBS-02, CLD-01)
 
-有负载运行 2 分钟后：
+After a workload has been running for 2 minutes:
 
 ```bash
 sql "show tables"
@@ -323,27 +323,27 @@ for t in tf_gpu_usage tf_node_metrics tf_pool_metrics tf_worker_resources tf_wor
 sql "select node, instance_type, hourly_price, currency, price_source from tf_node_metrics order by greptime_timestamp desc limit 1"
 ```
 
-预期：前四张表有数据；`tf_node_metrics` 的 `hourly_price` 是 T4 机型的按量价（1.0941，`price_source=list`）。`tf_worker_usage` 在当前版本没有数据，是已知问题（见 TEST-SUMMARY.md）。
+Expected: the first four tables have data; `hourly_price` in `tf_node_metrics` is the on-demand price of the T4 instance type (1.0941, `price_source=list`). `tf_worker_usage` has no data in the current version, which is a known issue (see TEST-SUMMARY.md).
 
-cloud app 上逐项确认：环境在线；节点 / GPU / workload 列表与 `kubectl` 一致；GPU 利用率、显存、功耗、温度曲线有数据；pool 的容量与已分配量一致；成本数字非零。
+Confirm item by item in the cloud app: the environment is online; the node / GPU / workload lists match `kubectl`; the GPU utilization, VRAM, power and temperature curves have data; the pool's capacity and allocated amount are consistent; the cost figures are non-zero.
 
-## 13. 已知不可用的功能（不要当成环境问题）
+## 13. Features known not to work (do not treat them as environment problems)
 
-| 功能 | 现象 | 原因 |
+| Feature | Symptom | Cause |
 |---|---|---|
-| remote 模式（ISO-06） | worker Pod `CrashLoopBackOff`，退出码 0，客户端 `cuda_available: false` | community 版 remote worker 启动时报 `License is not set` 后退出，chart 和 operator 没有下发 License 的配置 |
-| hard 隔离（ISO-04、PERF-LLM-02） | sidecar worker 退出，业务进程 `Bus error` | 同上 |
-| soft 下 `disable-features: gpu-limiter`（ISO-13） | 30% 限额仍被限到约 27% | webhook 只在 remote / hard 的客户端路径上处理这个注解 |
-| 无 libstdc++ 的镜像（ISO-14） | 容器内进程以 127 退出 | soft limiter 经 `ld.so.preload` 注入，依赖 glibc 与 libstdc++ |
+| remote mode (ISO-06) | The worker Pod is in `CrashLoopBackOff` with exit code 0, and the client reports `cuda_available: false` | The community remote worker reports `License is not set` at startup and exits; neither the chart nor the operator has any configuration for delivering a License |
+| hard isolation (ISO-04, PERF-LLM-02) | The sidecar worker exits and the application process gets `Bus error` | Same as above |
+| `disable-features: gpu-limiter` under soft (ISO-13) | A 30% limit is still limited to about 27% | The webhook only handles this annotation on the remote / hard client path |
+| Images without libstdc++ (ISO-14) | The process in the container exits with 127 | The soft limiter is injected through `ld.so.preload` and depends on glibc and libstdc++ |
 
-想亲眼看一遍 remote / hard 的现象：把用例 0 的 `tfpod` 里隔离模式换成 `hard`，或给 Pod 加 `tensor-fusion.ai/is-local-gpu: "false"`，然后 `kubectl logs <pod> -c tensorfusion-worker`。
+To see the remote / hard symptoms yourself: change the isolation mode in the `tfpod` of case 0 to `hard`, or add `tensor-fusion.ai/is-local-gpu: "false"` to the Pod, then run `kubectl logs <pod> -c tensorfusion-worker`.
 
-## 14. 收尾
+## 14. Wrap-up
 
 ```bash
 k get ns | grep -E '^t[0-9]+' | awk '{print $1}' | xargs -r kubectl delete ns
-make ack-sweep        # 列出这套环境现存的全部云资源
-make ack-down         # 销毁并再次清点；最后一行应全部是 clean
+make ack-sweep        # list all cloud resources of this environment that currently exist
+make ack-down         # tear down and check again; the last line should be all clean
 ```
 
-`ack/guard.sh` 在环境存活期间每 2 分钟检查一次：没有 NodeClaim 对应的 ECS 实例会被终止，GPU 实例超过 4 台时所有 NodePool 的上限被置 0。日志在 `ack/.work/guard.log`。
+While the environment is alive, `ack/guard.sh` checks every 2 minutes: ECS instances with no corresponding NodeClaim are terminated, and when there are more than 4 GPU instances the limits of all NodePools are set to 0. The log is in `ack/.work/guard.log`.

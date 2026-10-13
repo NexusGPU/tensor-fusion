@@ -22,7 +22,7 @@ import (
 
 var _ = Describe("karpenter base", func() {
 	Register(Case{
-		ID: "KRP-00", Title: "Karpenter 就绪：NodePool / EC2NodeClass Ready，nodeOverlay 特性门打开", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, NoNS: true,
+		ID: "KRP-00", Title: "Karpenter is ready: NodePool / EC2NodeClass Ready, nodeOverlay feature gate on", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			pools, err := env.list(ctx, gvkNodePool, "")
 			Expect(err).NotTo(HaveOccurred())
@@ -79,7 +79,7 @@ var _ = Describe("karpenter base", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-01", Title: "NodeOverlay 与 operator 的 NodeClaim RBAC 就位", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter}, NoNS: true,
+		ID: "KRP-01", Title: "NodeOverlay and the operator's NodeClaim RBAC are in place", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			ov, err := env.get(ctx, gvkNodeOverlay, "", "tensor-fusion-overlay")
 			Expect(err).NotTo(HaveOccurred(), "NodeOverlay missing: the chart only renders it when the Karpenter CRD existed at install time")
@@ -107,7 +107,7 @@ var _ = Describe("karpenter base", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-C01", Title: "Karpenter 拉起并回收一台非 GPU 节点（通用 NodePool）", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, Timeout: 15 * time.Minute,
+		ID: "KRP-C01", Title: "Karpenter launches and reclaims a non-GPU node (general-purpose NodePool)", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, Timeout: 15 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			// A node left in the pool would simply absorb the test pod. An idle pool
 			// is the precondition; Karpenter gets a consolidation cycle to reach it.

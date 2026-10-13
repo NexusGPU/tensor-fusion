@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TensorFusion 性能结果</title>
+<title>TensorFusion performance results</title>
 <!--
   Local viewer of e2e/perf-history/runs/**.json. Open this file directly; the
   data comes from data.js (regenerate with `python3 e2e/tools/perf_history.py build`).
@@ -85,12 +85,12 @@ svg text { fill: var(--text-secondary); font-size: 11px; }
 </head>
 <body>
 <header>
-  <h1>TensorFusion 性能结果 <span class="muted" style="font-weight:400;font-size:13px">切分、共调度与隔离的端到端性能，按版本留档</span></h1>
+  <h1>TensorFusion performance results <span class="muted" style="font-weight:400;font-size:13px">End-to-end performance of fractional sharing, co-scheduling and isolation, recorded per version</span></h1>
   <div class="filters">
-    <label>环境 <select id="env"></select></label>
-    <label>版本 <select id="ver"></select></label>
-    <label>环比对象 <select id="cmp"></select></label>
-    <button id="theme" title="切换明暗">明 / 暗</button>
+    <label>Environment <select id="env"></select></label>
+    <label>Version <select id="ver"></select></label>
+    <label>Compare with <select id="cmp"></select></label>
+    <button id="theme" title="Toggle light / dark">Light / Dark</button>
   </div>
 </header>
 <main id="app"></main>
@@ -113,18 +113,18 @@ const fmt = (v, d) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString(
 const ms = (s) => (s == null || !s ? null : s * 1000);
 const pct = (r) => (r == null || !isFinite(r) ? '–' : (r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
 const MODE_COLOR = {native: 'var(--series-native)', soft: 'var(--series-soft)', hard: 'var(--series-hard)', shared: 'var(--series-shared)', 'co-scheduled': 'var(--series-co)'};
-const MODE_NAME = {native: '原生（不经 TensorFusion）', soft: 'soft 隔离', hard: 'hard 隔离', shared: 'shared 整卡', 'co-scheduled': '共调度（同卡多租户）'};
+const MODE_NAME = {native: 'Native (without TensorFusion)', soft: 'soft isolation', hard: 'hard isolation', shared: 'shared whole GPU', 'co-scheduled': 'Co-scheduled (several tenants on one GPU)'};
 const colorOf = (p) => (p.cotenancy === 'co-scheduled' ? MODE_COLOR['co-scheduled'] : MODE_COLOR[p.mode] || 'var(--series-native)');
 const usable = (p) => !p.error && !p.skipped && p.throughput > 0;
 
 // configuration label of a point: what was limited and how
 function cfg(p) {
-  if (p.mode === 'native') return '原生 100%';
+  if (p.mode === 'native') return 'native 100%';
   let s = p.mode + ' ' + Math.round(p.share * 100) + '%';
-  if (p.cotenancy === 'co-scheduled') s += ' · 共调度' + (p.test ? ' ' + p.test.replace('tenant-', '租户 ').toUpperCase() : '');
-  else if (p.cotenancy && p.cotenancy !== 'alone') s += ' · 有吵闹邻居';
-  else if (p.case === 'PERF-CO-01') s += ' · 共调度用例的独占参照';
-  if (p.load === 'fixed-rate') s += ' · 固定到达率';
+  if (p.cotenancy === 'co-scheduled') s += ' · co-scheduled' + (p.test ? ' ' + p.test.toUpperCase().replace('TENANT-', 'tenant ') : '');
+  else if (p.cotenancy && p.cotenancy !== 'alone') s += ' · noisy neighbor';
+  else if (p.case === 'PERF-CO-01') s += ' · alone, reference of the co-scheduling case';
+  if (p.load === 'fixed-rate') s += ' · fixed arrival rate';
   return s;
 }
 // identity of a point across versions
@@ -170,13 +170,13 @@ function deltaCell(cur, prev, lowerIsBetter) {
   if (cur == null || prev == null || !prev) return el('td', {class: 'flat'}, '–');
   const r = cur / prev - 1;
   const good = lowerIsBetter ? r < -0.03 : r > 0.03, bad = lowerIsBetter ? r > 0.03 : r < -0.03;
-  return el('td', {class: good ? 'up' : bad ? 'down' : 'flat', title: `上一版本 ${fmt(prev)}`}, (good ? '▲ ' : bad ? '▼ ' : '') + pct(r));
+  return el('td', {class: good ? 'up' : bad ? 'down' : 'flat', title: `previous version ${fmt(prev)}`}, (good ? '▲ ' : bad ? '▼ ' : '') + pct(r));
 }
 // line over versions (single series, one axis)
 function trend(series, unit) {
   const W = 400, H = 150, L = 46, R = 12, T = 12, B = 26;
   const vals = series.map((s) => s.value).filter((v) => v != null);
-  if (!vals.length) return el('div', {class: 'empty'}, '没有数据');
+  if (!vals.length) return el('div', {class: 'empty'}, 'No data');
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (lo === hi) { lo = lo * 0.9; hi = hi * 1.1 || 1; }
   const pad = (hi - lo) * 0.15; lo = Math.max(0, lo - pad); hi += pad;
@@ -205,7 +205,7 @@ function trend(series, unit) {
 function render() {
   const app = $('#app');
   app.innerHTML = '';
-  if (!DATA.length) { app.append(el('section', null, el('h2', null, '没有数据'), el('p', {class: 'lead'}, '先运行 python3 e2e/tools/perf_history.py record --version <版本> --env <环境> e2e/results/<run-id> ...'))); return; }
+  if (!DATA.length) { app.append(el('section', null, el('h2', null, 'No data'), el('p', {class: 'lead'}, 'Run this first: python3 e2e/tools/perf_history.py record --version <version> --env <environment> e2e/results/<run-id> ...'))); return; }
   const env = $('#env').value;
   const runs = DATA.filter((r) => r.env === env).sort((a, b) => cmpVer(a.version, b.version));
   const run = runs.find((r) => r.version === $('#ver').value) || runs[runs.length - 1];
@@ -219,53 +219,53 @@ function render() {
   const counts = {};
   run.cases.forEach((c) => { counts[c.status] = (counts[c.status] || 0) + 1; });
   const tile = (k, v, d) => el('div', {class: 'tile'}, el('div', {class: 'k'}, k), el('div', {class: 'v', html: v}), el('div', {class: 'd'}, d || ''));
-  const s1 = el('section', null, el('h2', null, `${run.label} · 版本 ${run.version}`),
-    el('p', {class: 'lead'}, `operator ${run.release.operator} · hypervisor ${run.release.hypervisor} · Kubernetes ${run.cluster.kubernetes} · 记录于 ${run.date}` + (prev ? ` · 环比对象：版本 ${prev.version}` : ' · 这是该环境的第一个留档版本，环比列为空')),
+  const s1 = el('section', null, el('h2', null, `${run.label} · version ${run.version}`),
+    el('p', {class: 'lead'}, `operator ${run.release.operator} · hypervisor ${run.release.hypervisor} · Kubernetes ${run.cluster.kubernetes} · recorded on ${run.date}` + (prev ? ` · compared with version ${prev.version}` : ' · this is the first version recorded for this environment, so the change columns are empty')),
     el('div', {class: 'tiles'},
       tile('GPU', run.cluster.gpu_model || '–', run.cluster.instance_type || ''),
-      tile('用例', `${counts.passed || 0}<small>通过</small>`, `${counts.failed || 0} 失败 · ${counts['known-fail'] || 0} 已知问题 · ${counts.skipped || 0} 跳过`),
-      tile('性能测量点', String(pts.length), `${llm.length} 个 LLM · ${pts.length - llm.length} 个其它负载`),
-      tile('节点供给', run.cluster.karpenter === 'no' ? '静态' : 'Karpenter', run.cluster.karpenter === 'alibaba' ? '阿里云 provider' : run.cluster.karpenter)));
-  if ((run.notes || []).length) s1.append(el('details', null, el('summary', null, '本次留档的说明'), el('ul', null, run.notes.map((n) => el('li', null, n)))));
+      tile('Cases', `${counts.passed || 0}<small>passed</small>`, `${counts.failed || 0} failed · ${counts['known-fail'] || 0} known issues · ${counts.skipped || 0} skipped`),
+      tile('Performance points', String(pts.length), `${llm.length} LLM · ${pts.length - llm.length} other workloads`),
+      tile('Node provisioning', run.cluster.karpenter === 'no' ? 'Static' : 'Karpenter', run.cluster.karpenter === 'alibaba' ? 'Alibaba Cloud provider' : run.cluster.karpenter)));
+  if ((run.notes || []).length) s1.append(el('details', null, el('summary', null, 'Notes on this record'), el('ul', null, run.notes.map((n) => el('li', null, n)))));
   app.append(s1);
 
   // ---- 2. LLM ----
   const nativeLLM = llm.find((p) => p.mode === 'native');
   const sat = llm.filter((p) => p.load === 'saturation' && p.case !== 'PERF-CO-01');
-  const s2 = el('section', null, el('h2', null, 'LLM 流式推理（vLLM）'),
-    el('p', {class: 'lead'}, llm.length ? `模型 ${llm[0].model}，每个租户显存上限 ${llm.find((p) => p.vram_limit_gib)?.vram_limit_gib || '–'} GiB，闭环 ${'8'} 路并发流式请求打满。吞吐应随算力份额成比例下降，延迟应按 1/份额 放大而不出现断崖。` : ''));
-  if (!llm.length) s2.append(el('div', {class: 'empty'}, '这个版本没有 LLM 测量点（perf 档未执行或全部失败）。'));
+  const s2 = el('section', null, el('h2', null, 'LLM streaming inference (vLLM)'),
+    el('p', {class: 'lead'}, llm.length ? `Model ${llm[0].model}, VRAM limit ${llm.find((p) => p.vram_limit_gib)?.vram_limit_gib || '–'} GiB per tenant, saturated by ${'8'} concurrent closed-loop streaming requests. Throughput should fall in proportion to the compute share, and latency should grow by 1/share without a cliff.` : ''));
+  if (!llm.length) s2.append(el('div', {class: 'empty'}, 'This version has no LLM points (the perf tier was not run, or all of it failed).'));
   else {
     const keyTiles = [];
     const soft100 = sat.find((p) => p.mode === 'soft' && p.share === 1), soft50 = sat.find((p) => p.mode === 'soft' && p.share === 0.5);
-    if (nativeLLM) keyTiles.push(tile('原生吞吐', `${fmt(nativeLLM.throughput)}<small>tokens/s</small>`, `TPM ${fmt(nativeLLM.tpm, 0)}`));
-    if (nativeLLM && soft100) keyTiles.push(tile('soft 100% 相对原生', pct(soft100.throughput / nativeLLM.throughput - 1), '不限额时隔离本身的代价'));
-    if (soft100 && soft50) keyTiles.push(tile('soft 50% / soft 100%', fmt(soft50.throughput / soft100.throughput * 100, 1) + '<small>%</small>', '理想值 50%'));
+    if (nativeLLM) keyTiles.push(tile('Native throughput', `${fmt(nativeLLM.throughput)}<small>tokens/s</small>`, `TPM ${fmt(nativeLLM.tpm, 0)}`));
+    if (nativeLLM && soft100) keyTiles.push(tile('soft 100% vs. native', pct(soft100.throughput / nativeLLM.throughput - 1), 'Cost of the isolation itself when nothing is limited'));
+    if (soft100 && soft50) keyTiles.push(tile('soft 50% / soft 100%', fmt(soft50.throughput / soft100.throughput * 100, 1) + '<small>%</small>', 'Ideal 50%'));
     if (soft50) keyTiles.push(tile('soft 50% TTFT p95', fmt(ms(soft50.ttft_s.p95), 0) + '<small>ms</small>', `TPOT p99 ${fmt(ms(soft50.tpot_s.p99), 1)} ms`));
     s2.append(el('div', {class: 'tiles', style: 'margin-bottom:16px'}, keyTiles));
 
     const mk = (get, unit, ideal) => bars(sat.map((p) => ({
       label: cfg(p), value: get(p), color: colorOf(p),
       ref: ideal ? ideal(p) : null,
-      tipText: `${cfg(p)}\n${fmt(get(p))} ${unit}` + (ideal && ideal(p) != null ? `\n按份额折算的理想值 ${fmt(ideal(p))} ${unit}` : '') + (p.pass === false ? '\n判据未通过：' + (p.verdicts || []).filter((v) => !v.pass).map((v) => v.criterion).join('、') : ''),
+      tipText: `${cfg(p)}\n${fmt(get(p))} ${unit}` + (ideal && ideal(p) != null ? `\nIdeal value scaled by the share: ${fmt(ideal(p))} ${unit}` : '') + (p.pass === false ? '\nCriteria failed: ' + (p.verdicts || []).filter((v) => !v.pass).map((v) => v.criterion).join(', ') : ''),
     })), unit);
     const base = soft100 || nativeLLM;
-    s2.append(legend([{name: MODE_NAME.native, color: MODE_COLOR.native}, {name: MODE_NAME.soft, color: MODE_COLOR.soft}, {name: MODE_NAME.hard, color: MODE_COLOR.hard}, {name: '竖线：按份额折算的理想值', line: true}]));
+    s2.append(legend([{name: MODE_NAME.native, color: MODE_COLOR.native}, {name: MODE_NAME.soft, color: MODE_COLOR.soft}, {name: MODE_NAME.hard, color: MODE_COLOR.hard}, {name: 'Vertical line: ideal value scaled by the share', line: true}]));
     s2.append(el('div', {class: 'grid2'},
-      chart('输出吞吐', 'tokens/s，越高越好；理想值 = 同模式 100% 的吞吐 × 份额', mk((p) => p.throughput, 'tokens/s', (p) => (p.mode === 'native' || !base ? null : (sat.find((q) => q.mode === p.mode && q.share === 1) || base).throughput * p.share))),
-      chart('首 token 时延 TTFT p95', 'ms，越低越好；理想值 = 同模式 100% 的值 ÷ 份额', mk((p) => ms(p.ttft_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.ttft_s.p95) / p.share; })),
-      chart('每 token 时延 TPOT p99', 'ms，按请求统计，越低越好', mk((p) => ms(p.tpot_s.p99 || p.tpot_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.tpot_s.p99 || b.tpot_s.p95) / p.share; })),
-      chart('逐 token 间隔 ITL p99', 'ms，按 token 统计；限流器的周期性停顿会先在这里出现', mk((p) => ms(p.itl_s.p99), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.itl_s.p99) / p.share; }))));
+      chart('Output throughput', 'tokens/s, higher is better; ideal = throughput of the same mode at 100% × share', mk((p) => p.throughput, 'tokens/s', (p) => (p.mode === 'native' || !base ? null : (sat.find((q) => q.mode === p.mode && q.share === 1) || base).throughput * p.share))),
+      chart('Time to first token, TTFT p95', 'ms, lower is better; ideal = value of the same mode at 100% ÷ share', mk((p) => ms(p.ttft_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.ttft_s.p95) / p.share; })),
+      chart('Time per output token, TPOT p99', 'ms, per request, lower is better', mk((p) => ms(p.tpot_s.p99 || p.tpot_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.tpot_s.p99 || b.tpot_s.p95) / p.share; })),
+      chart('Inter-token gap, ITL p99', 'ms, per token; periodic stalls of the limiter show up here first', mk((p) => ms(p.itl_s.p99), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.itl_s.p99) / p.share; }))));
 
-    s2.append(el('details', {open: ''}, el('summary', null, '全部 LLM 指标（表格）'), table(
-      ['配置', 'tokens/s', '相对原生', '环比', 'TPM', 'TTFT p50', 'TTFT p95', 'TPOT p50', 'TPOT p99', 'ITL p50', 'ITL p99', 'ITL max', '请求时延 p95', '停顿 ≥0.4s', '停顿 ≥0.9s', '错误率', '请求数', '判据'],
+    s2.append(el('details', {open: ''}, el('summary', null, 'All LLM metrics (table)'), table(
+      ['Configuration', 'tokens/s', 'vs. native', 'vs. previous', 'TPM', 'TTFT p50', 'TTFT p95', 'TPOT p50', 'TPOT p99', 'ITL p50', 'ITL p99', 'ITL max', 'Request latency p95', 'Stalls ≥0.4s', 'Stalls ≥0.9s', 'Error rate', 'Requests', 'Criteria'],
       llm.map((p) => { const q = prevBy[pid(p)]; return [
         el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), cfg(p)),
         fmt(p.throughput), nativeLLM && p !== nativeLLM ? pct(p.throughput / nativeLLM.throughput - 1) : '–', deltaCell(p.throughput, q && q.throughput, false),
         fmt(p.tpm, 0), fmt(ms(p.ttft_s.p50), 0) + ' ms', fmt(ms(p.ttft_s.p95), 0) + ' ms', fmt(ms(p.tpot_s.p50), 1) + ' ms', fmt(ms(p.tpot_s.p99), 1) + ' ms',
         fmt(ms(p.itl_s.p50), 1) + ' ms', fmt(ms(p.itl_s.p99), 1) + ' ms', fmt(ms(p.itl_s.max), 0) + ' ms', fmt(ms(p.latency_s.p95), 0) + ' ms',
         String(p.gaps_ge_400ms || 0), String(p.gaps_ge_900ms || 0), (p.error_rate * 100).toFixed(2) + '%', String(p.requests),
-        el('td', {title: (p.verdicts || []).map((v) => `${v.pass ? '✓' : '✗'} ${v.criterion}: ${fmt(v.value, 3)} (${v.bound})`).join('\n')}, p.pass == null ? '–' : p.pass ? '✓ 通过' : '✗ ' + (p.verdicts || []).filter((v) => !v.pass).length + ' 项'),
+        el('td', {title: (p.verdicts || []).map((v) => `${v.pass ? '✓' : '✗'} ${v.criterion}: ${fmt(v.value, 3)} (${v.bound})`).join('\n')}, p.pass == null ? '–' : p.pass ? '✓ passed' : '✗ ' + (p.verdicts || []).filter((v) => !v.pass).length + ' failed'),
       ]; }))));
   }
   app.append(s2);
@@ -273,36 +273,36 @@ function render() {
   // ---- 3. co-scheduling ----
   const co = llm.filter((p) => p.cotenancy === 'co-scheduled');
   const coAlone = llm.find((p) => p.case === 'PERF-CO-01' && p.cotenancy === 'alone');
-  const s3 = el('section', null, el('h2', null, '切分 + 共调度：一张卡上的两个租户'),
-    el('p', {class: 'lead'}, '两个 vLLM 实例各拿 50% 算力、落在同一张 GPU 上，同时被打满。看三件事：两个租户合计能拿回整卡的多少、两个租户之间是否公平、各自的尾延迟。'));
-  if (co.length < 2 || !coAlone) s3.append(el('div', {class: 'empty'}, '这个版本没有共调度测量点（PERF-CO-01 未执行或失败）。'));
+  const s3 = el('section', null, el('h2', null, 'Fractional sharing + co-scheduling: two tenants on one GPU'),
+    el('p', {class: 'lead'}, 'Two vLLM instances get 50% of the compute each, land on the same GPU and are saturated at the same time. Three things to look at: how much of the whole GPU the two tenants get back combined, whether the two tenants are treated fairly, and the tail latency of each.'));
+  if (co.length < 2 || !coAlone) s3.append(el('div', {class: 'empty'}, 'This version has no co-scheduling points (PERF-CO-01 was not run, or failed).'));
   else {
     const sum = co.reduce((a, p) => a + p.throughput, 0);
     const lo = Math.min(...co.map((p) => p.throughput)), hi = Math.max(...co.map((p) => p.throughput));
     s3.append(el('div', {class: 'tiles', style: 'margin-bottom:16px'},
-      tile('两租户合计', `${fmt(sum)}<small>tokens/s</small>`, `独占整卡时 ${fmt(coAlone.throughput)} tokens/s`),
-      tile('合计 / 独占', fmt(sum / coAlone.throughput * 100, 1) + '<small>%</small>', '切分带来的总吞吐损失'),
-      tile('租户间公平性', fmt(lo / hi * 100, 1) + '<small>%</small>', '较慢租户 ÷ 较快租户'),
-      tile('最差 TTFT p95', fmt(Math.max(...co.map((p) => ms(p.ttft_s.p95))), 0) + '<small>ms</small>', `独占时 ${fmt(ms(coAlone.ttft_s.p95), 0)} ms`)));
-    s3.append(legend([{name: 'soft 100% 独占', color: MODE_COLOR.soft}, {name: '共调度的租户', color: MODE_COLOR['co-scheduled']}]));
+      tile('Two tenants combined', `${fmt(sum)}<small>tokens/s</small>`, `${fmt(coAlone.throughput)} tokens/s with the whole GPU alone`),
+      tile('Combined / alone', fmt(sum / coAlone.throughput * 100, 1) + '<small>%</small>', 'Total throughput lost to fractional sharing'),
+      tile('Fairness between tenants', fmt(lo / hi * 100, 1) + '<small>%</small>', 'Slower tenant ÷ faster tenant'),
+      tile('Worst TTFT p95', fmt(Math.max(...co.map((p) => ms(p.ttft_s.p95))), 0) + '<small>ms</small>', `${fmt(ms(coAlone.ttft_s.p95), 0)} ms alone`)));
+    s3.append(legend([{name: 'soft 100% alone', color: MODE_COLOR.soft}, {name: 'Co-scheduled tenants', color: MODE_COLOR['co-scheduled']}]));
     s3.append(el('div', {class: 'grid2'},
-      chart('吞吐', 'tokens/s；第二行把两个租户首尾相接', bars([
-        {label: 'soft 100% 独占', value: coAlone.throughput, color: MODE_COLOR.soft},
-        {label: '租户 A + 租户 B', value: sum, segments: co.map((p) => ({value: p.throughput, color: MODE_COLOR['co-scheduled']})), tipText: co.map((p) => `${cfg(p)}: ${fmt(p.throughput)} tokens/s`).join('\n') + `\n合计 ${fmt(sum)} tokens/s`},
+      chart('Throughput', 'tokens/s; the second row puts the two tenants end to end', bars([
+        {label: 'soft 100% alone', value: coAlone.throughput, color: MODE_COLOR.soft},
+        {label: 'tenant A + tenant B', value: sum, segments: co.map((p) => ({value: p.throughput, color: MODE_COLOR['co-scheduled']})), tipText: co.map((p) => `${cfg(p)}: ${fmt(p.throughput)} tokens/s`).join('\n') + `\nCombined ${fmt(sum)} tokens/s`},
         ...co.map((p) => ({label: cfg(p), value: p.throughput, color: MODE_COLOR['co-scheduled'], ref: coAlone.throughput / 2})),
       ], 'tokens/s')),
-      chart('尾延迟', 'ms，越低越好', bars([coAlone, ...co].flatMap((p) => [
-        {label: (p === coAlone ? '独占' : cfg(p).split('· ')[1]) + ' · TTFT p95', value: ms(p.ttft_s.p95), color: colorOf(p)},
-        {label: (p === coAlone ? '独占' : cfg(p).split('· ')[1]) + ' · ITL p99', value: ms(p.itl_s.p99), color: colorOf(p)},
+      chart('Tail latency', 'ms, lower is better', bars([coAlone, ...co].flatMap((p) => [
+        {label: (p === coAlone ? 'alone' : cfg(p).split('· ')[1]) + ' · TTFT p95', value: ms(p.ttft_s.p95), color: colorOf(p)},
+        {label: (p === coAlone ? 'alone' : cfg(p).split('· ')[1]) + ' · ITL p99', value: ms(p.itl_s.p99), color: colorOf(p)},
       ]), 'ms'))));
   }
   app.append(s3);
 
   // ---- 4. other runtimes ----
   const other = pts.filter((p) => p.workload !== 'vllm');
-  const s4 = el('section', null, el('h2', null, '其它负载：ONNX Runtime、TorchBench、MLPerf 风格、matmul'),
-    el('p', {class: 'lead'}, '限流器拦截 kernel launch 的方式因框架而异，所以用不同执行形态各测一遍。相对值都是同一负载、同一模型下的比值。'));
-  if (!other.length) s4.append(el('div', {class: 'empty'}, '没有数据。'));
+  const s4 = el('section', null, el('h2', null, 'Other workloads: ONNX Runtime, TorchBench, MLPerf style, matmul'),
+    el('p', {class: 'lead'}, 'How the limiter intercepts kernel launches differs between frameworks, so each execution style is measured separately. Relative values are ratios within the same workload and the same model.'));
+  if (!other.length) s4.append(el('div', {class: 'empty'}, 'No data.'));
   else {
     const groups = {};
     other.forEach((p) => { const k = [p.workload, p.model, p.test || ''].join(' · ').replace(/ · $/, ''); (groups[k] = groups[k] || []).push(p); });
@@ -312,29 +312,29 @@ function render() {
       g.forEach((p) => { const base = g.find((q) => q.mode === p.mode && q.share === 1 && q.cotenancy === 'alone'); const q = prevBy[pid(p)]; rows.push([
         el('td', {class: 'l'}, k), el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), cfg(p)),
         fmt(p.throughput) + ' ' + p.throughput_unit, nat && p !== nat ? pct(p.throughput / nat.throughput - 1) : '–',
-        base && p !== base ? fmt(p.throughput / base.throughput * 100, 1) + '%' + (p.share < 1 ? `（理想 ${Math.round(p.share * 100)}%）` : '') : '–',
+        base && p !== base ? fmt(p.throughput / base.throughput * 100, 1) + '%' + (p.share < 1 ? ` (ideal ${Math.round(p.share * 100)}%)` : '') : '–',
         deltaCell(p.throughput, q && q.throughput, false),
         p.latency_s && p.latency_s.p50 ? fmt(ms(p.latency_s.p50), 2) + ' ms' : '–', p.latency_s && p.latency_s.p99 ? fmt(ms(p.latency_s.p99), 2) + ' ms' : '–',
         String(p.gaps_ge_400ms || 0), p.pass == null ? '–' : p.pass ? '✓' : '✗',
       ]); });
     });
-    s4.append(table(['负载 · 模型', '配置', '吞吐', '相对原生', '相对同模式 100%', '环比', '时延 p50', '时延 p99', '停顿 ≥0.4s', '判据'], rows));
+    s4.append(table(['Workload · model', 'Configuration', 'Throughput', 'vs. native', 'vs. same mode at 100%', 'vs. previous', 'Latency p50', 'Latency p99', 'Stalls ≥0.4s', 'Criteria'], rows));
   }
   app.append(s4);
 
   // ---- 5. machine ----
   const mach = pts.filter((p) => p.machine && p.machine.samples > 0);
-  const s5 = el('section', null, el('h2', null, '机器指标：测量窗口内 GPU 自身的读数'),
-    el('p', {class: 'lead'}, '来自 hypervisor 的设备遥测（GreptimeDB 的 tf_gpu_usage），不是容器内看到的值。同一张卡上还有别的租户时，读数是整张卡的。采样间隔较长，窗口内样本数见表。'));
-  if (!mach.length) s5.append(el('div', {class: 'empty'}, '这个版本的测量点没有带机器指标。'));
+  const s5 = el('section', null, el('h2', null, 'Machine metrics: readings of the GPU itself during the measurement window'),
+    el('p', {class: 'lead'}, 'From the device telemetry of the hypervisor (tf_gpu_usage in GreptimeDB), not the values seen inside the container. When other tenants are on the same GPU, the readings cover the whole GPU. The sampling interval is long; the table gives the number of samples in the window.'));
+  if (!mach.length) s5.append(el('div', {class: 'empty'}, 'The points of this version carry no machine metrics.'));
   else {
     const show = mach.filter((p) => p.load === 'saturation').slice(0, 14);
     const name = (p) => `${p.workload === 'vllm' ? 'LLM' : p.workload + ' ' + p.model} · ${cfg(p)}`;
     s5.append(el('div', {class: 'grid2'},
-      chart('GPU 利用率（窗口均值）', '%；竖线为窗口内最大值', bars(show.map((p) => ({label: name(p), value: p.machine.gpu_util_avg_pct, ref: p.machine.gpu_util_max_pct, color: colorOf(p)})), '%')),
-      chart('功耗（窗口均值）', 'W；竖线为窗口内最大值', bars(show.map((p) => ({label: name(p), value: p.machine.power_avg_w, ref: p.machine.power_max_w, color: colorOf(p)})), 'W'))));
-    s5.append(el('details', {open: ''}, el('summary', null, '全部机器指标（表格）'), table(
-      ['测量点', '机型', 'GPU 利用率 均值', '最大', '实际算力 TFLOPS', '显存占用 最大', '显存占比', '功耗 均值', '功耗 最大', '温度 最大', '每瓦吞吐', '样本数'],
+      chart('GPU utilization (window average)', '%; the vertical line is the maximum in the window', bars(show.map((p) => ({label: name(p), value: p.machine.gpu_util_avg_pct, ref: p.machine.gpu_util_max_pct, color: colorOf(p)})), '%')),
+      chart('Power (window average)', 'W; the vertical line is the maximum in the window', bars(show.map((p) => ({label: name(p), value: p.machine.power_avg_w, ref: p.machine.power_max_w, color: colorOf(p)})), 'W'))));
+    s5.append(el('details', {open: ''}, el('summary', null, 'All machine metrics (table)'), table(
+      ['Point', 'Instance type', 'GPU utilization avg', 'max', 'Actual compute TFLOPS', 'VRAM used max', 'VRAM used %', 'Power avg', 'Power max', 'Temperature max', 'Throughput per watt', 'Samples'],
       mach.map((p) => { const m = p.machine; return [
         el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), `${p.case} · ${p.workload} ${p.model !== 'model' ? p.model.split('/').pop() : ''} · ${cfg(p)}`),
         m.instance_type || '–', fmt(m.gpu_util_avg_pct, 1) + '%', fmt(m.gpu_util_max_pct, 0) + '%', fmt(m.compute_tflops_avg, 1), fmt(m.vram_used_max_mib, 0) + ' MiB', fmt(m.vram_used_max_pct, 1) + '%',
@@ -345,30 +345,30 @@ function render() {
   app.append(s5);
 
   // ---- 6. across versions ----
-  const s6 = el('section', null, el('h2', null, '版本趋势'),
-    el('p', {class: 'lead'}, runs.length > 1 ? `环境 ${run.label} 上已留档 ${runs.length} 个版本。` : `环境 ${run.label} 目前只留档了一个版本；下一个版本用同一条命令留档后，这里和各表的「环比」列会自动出现对比。`));
+  const s6 = el('section', null, el('h2', null, 'Trend across versions'),
+    el('p', {class: 'lead'}, runs.length > 1 ? `${runs.length} versions are recorded for environment ${run.label}.` : `Only one version is recorded for environment ${run.label} so far; once the next version is recorded with the same command, the comparison appears here and in the "vs. previous" column of each table.`));
   const metric = (r, f) => { try { const v = f(r.points.filter(usable)); return v == null || !isFinite(v) ? null : v; } catch (e) { return null; } };
   const find = (ps, mode, share, extra) => ps.find((p) => p.workload === 'vllm' && p.mode === mode && p.share === share && p.load === 'saturation' && p.cotenancy === 'alone' && p.case !== 'PERF-CO-01' && (!extra || extra(p)));
   const defs = [
-    ['原生吞吐', 'tokens/s', (ps) => find(ps, 'native', 1).throughput],
-    ['soft 100% 相对原生的吞吐', '%', (ps) => find(ps, 'soft', 1).throughput / find(ps, 'native', 1).throughput * 100],
-    ['soft 50% 相对 soft 100% 的吞吐', '%（理想 50）', (ps) => find(ps, 'soft', 0.5).throughput / find(ps, 'soft', 1).throughput * 100],
-    ['soft 50% 的 TPOT p99', 'ms', (ps) => ms(find(ps, 'soft', 0.5).tpot_s.p99)],
-    ['soft 50% 的 TTFT p95', 'ms', (ps) => ms(find(ps, 'soft', 0.5).ttft_s.p95)],
-    ['共调度两租户合计 / 独占', '%', (ps) => { const c = ps.filter((p) => p.cotenancy === 'co-scheduled'); const a = ps.find((p) => p.case === 'PERF-CO-01' && p.cotenancy === 'alone'); return c.reduce((s, p) => s + p.throughput, 0) / a.throughput * 100; }],
+    ['Native throughput', 'tokens/s', (ps) => find(ps, 'native', 1).throughput],
+    ['Throughput of soft 100% vs. native', '%', (ps) => find(ps, 'soft', 1).throughput / find(ps, 'native', 1).throughput * 100],
+    ['Throughput of soft 50% vs. soft 100%', '% (ideal 50)', (ps) => find(ps, 'soft', 0.5).throughput / find(ps, 'soft', 1).throughput * 100],
+    ['TPOT p99 at soft 50%', 'ms', (ps) => ms(find(ps, 'soft', 0.5).tpot_s.p99)],
+    ['TTFT p95 at soft 50%', 'ms', (ps) => ms(find(ps, 'soft', 0.5).ttft_s.p95)],
+    ['Co-scheduling: two tenants combined / alone', '%', (ps) => { const c = ps.filter((p) => p.cotenancy === 'co-scheduled'); const a = ps.find((p) => p.case === 'PERF-CO-01' && p.cotenancy === 'alone'); return c.reduce((s, p) => s + p.throughput, 0) / a.throughput * 100; }],
   ];
-  s6.append(el('div', {class: 'grid2'}, defs.map((d) => chart(d[0], d[1], trend(runs.map((r) => ({version: r.version, value: metric(r, d[2])})), d[1].split('（')[0])))));
+  s6.append(el('div', {class: 'grid2'}, defs.map((d) => chart(d[0], d[1], trend(runs.map((r) => ({version: r.version, value: metric(r, d[2])})), d[1].split(' (')[0])))));
   app.append(s6);
 
   // ---- 7. cases ----
-  const ST = {passed: ['var(--good)', '✓ 通过'], failed: ['var(--critical)', '✗ 失败'], 'known-fail': ['var(--warning)', '! 已知问题'], skipped: ['var(--text-muted)', '– 跳过']};
+  const ST = {passed: ['var(--good)', '✓ passed'], failed: ['var(--critical)', '✗ failed'], 'known-fail': ['var(--warning)', '! known issue'], skipped: ['var(--text-muted)', '– skipped']};
   const prevCase = {};
   if (prev) prev.cases.forEach((c) => { prevCase[c.id] = c; });
-  const s7 = el('section', null, el('h2', null, '功能与隔离用例'),
-    el('p', {class: 'lead'}, '同一批运行里的全部用例。带数字的测量值（恢复耗时、扩容耗时、成本）也在这里。'),
-    table(['ID', '用例', '状态', prev ? `版本 ${prev.version}` : '环比', '耗时', '测量值 / 原因'], run.cases.map((c) => {
+  const s7 = el('section', null, el('h2', null, 'Functional and isolation cases'),
+    el('p', {class: 'lead'}, 'Every case of the same batch of runs. Numeric measurements (recovery time, scale-up time, cost) are here too.'),
+    table(['ID', 'Case', 'Status', prev ? `Version ${prev.version}` : 'vs. previous', 'Duration', 'Measurements / reason'], run.cases.map((c) => {
       const st = ST[c.status] || ['var(--text-muted)', c.status];
-      const meas = (c.measurements || []).map((m) => `${m.name}=${fmt(m.value)}${m.unit ? ' ' + m.unit : ''}`).join('； ');
+      const meas = (c.measurements || []).map((m) => `${m.name}=${fmt(m.value)}${m.unit ? ' ' + m.unit : ''}`).join('; ');
       const pc = prevCase[c.id];
       return [el('td', {class: 'l'}, c.id), el('td', {class: 'l wrap'}, c.title),
         el('td', {class: 'l'}, el('span', {class: 'status'}, el('span', {class: 'dot', style: `background:${st[0]}`}), st[1])),
@@ -390,7 +390,7 @@ function init() {
   };
   const fillCmp = () => {
     const runs = DATA.filter((r) => r.env === envSel.value && cmpVer(r.version, verSel.value) < 0).sort((a, b) => cmpVer(a.version, b.version));
-    cmpSel.innerHTML = ''; cmpSel.append(el('option', {value: ''}, runs.length ? '不对比' : '没有更早的版本'));
+    cmpSel.innerHTML = ''; cmpSel.append(el('option', {value: ''}, runs.length ? 'No comparison' : 'No earlier version'));
     runs.forEach((r) => cmpSel.append(el('option', {value: r.version}, r.version)));
     if (runs.length) cmpSel.value = runs[runs.length - 1].version;
   };

@@ -96,7 +96,7 @@ func claimEvents(ctx context.Context, name string) []string {
 
 var _ = Describe("karpenter path A", func() {
 	Register(Case{
-		ID: "KRP-A08", Title: "从 0 个 GPU 节点冷启动：Pending 的 TF Pod → Karpenter NodeClaim → 节点 → GPU 注册 → Pod 运行",
+		ID: "KRP-A08", Title: "Cold start from 0 GPU nodes: Pending TF Pod → Karpenter NodeClaim → node → GPU registered → Pod runs",
 		Tiers: []string{TierKarpenter, TierRehearsal, TierDryRun, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter}, Timeout: 45 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			pool := targetNodePool()
@@ -174,7 +174,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A15", Title: "chart 默认 NodeOverlay 会让 Karpenter 为 TF Pod 拉起非 TF 节点", Tiers: []string{TierKarpenter, TierDryRun, TierKWOK},
+		ID: "KRP-A15", Title: "The chart's default NodeOverlay makes Karpenter launch non-TF nodes for TF Pods", Tiers: []string{TierKarpenter, TierDryRun, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter}, Timeout: 12 * time.Minute, Mode: ModeNoGPU,
 		KnownIssue: "NodeOverlay/tensor-fusion-overlay has `requirements: []` (chart 1.8.8): every NodePool advertises tensor-fusion.ai/index_*, so Karpenter launches a non-GPU node for a pending TF pod; the NodeClaim stays Initialized=Unknown (ResourceNotRegistered) and is never consolidated",
 		Run: func(ctx SpecContext, c *C) {
@@ -224,7 +224,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A02", Title: "GPU 不足 → 扩容器创建 NodeClaim → 新节点 → Pod 运行（核心闭环）", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "KRP-A02", Title: "Not enough GPU → the expander creates a NodeClaim → new node → Pod runs (the core loop)", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			env.ensureGPUs(ctx, c, 1)
@@ -319,7 +319,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A16", Title: "扩容节点的 GPU 就绪后，Pending Pod 应及时绑定（不等调度器 5 分钟兜底重试）", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "KRP-A16", Title: "Once the GPU on the scaled-up node is ready, the Pending Pod should be bound promptly (without waiting for the scheduler's 5-minute fallback retry)", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, NoNS: true,
 		KnownIssue: "a pod that failed scheduling while the new node's GPU was not registered yet is not re-queued when the GPU CR becomes Running; it is retried only by the scheduler's 5-minute unschedulable flush. Until then the new node is empty for Karpenter, so with consolidateAfter <= 5m the node is removed before the pod lands (observed twice in the rehearsal, operator 2.17.23)",
 		Run: func(ctx SpecContext, c *C) {
@@ -340,7 +340,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A03", Title: "一次扩容承接多个 Pending Pod（不是一个 Pod 一台机器）", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "KRP-A03", Title: "One scale-up serves several Pending Pods (not one machine per Pod)", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			env.ensureGPUs(ctx, c, 1)
@@ -391,7 +391,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A17", Title: "N 个整卡 Pod 同时 Pending：恰好扩 N 台（不多扩、不少扩）", Tiers: []string{TierKarpenter, TierKWOK},
+		ID: "KRP-A17", Title: "N whole-GPU Pods Pending at the same time: exactly N nodes are added (no more, no fewer)", Tiers: []string{TierKarpenter, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			n, _ := strconv.Atoi(getenv("E2E_BURST", "4"))
@@ -464,7 +464,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-A09", Title: "负载清空后节点被回收（should-delete 标记 + Karpenter consolidation）", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "KRP-A09", Title: "The node is reclaimed after the workloads are gone (should-delete mark + Karpenter consolidation)", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			// No holdNodes here: the point is that nothing keeps an empty node alive.
@@ -517,7 +517,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "FIN-01", Title: "FinOps：N 个分片负载 vs 整卡基线的节点小时与成本", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "FIN-01", Title: "FinOps: node-hours and cost of N fractional workloads vs. the whole-GPU baseline", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter}, Timeout: 45 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			if env.Mode == ModeNoGPU {
@@ -627,7 +627,7 @@ var _ = Describe("karpenter path A", func() {
 	})
 
 	Register(Case{
-		ID: "NLC-09", Title: "节点被删除后状态收敛，Deployment 的 Pod 在新节点重建", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
+		ID: "NLC-09", Title: "State converges after a node is deleted, and the Deployment's Pod is re-created on a new node", Tiers: []string{TierKarpenter, TierRehearsal, TierKWOK},
 		Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
