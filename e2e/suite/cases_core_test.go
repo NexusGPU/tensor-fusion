@@ -125,7 +125,7 @@ func (e *Env) waitAllReady(ctx context.Context, ns string, names []string, timeo
 
 var _ = Describe("discovery", func() {
 	Register(Case{
-		ID: "INS-03", Title: "GPU 节点与 GPU 自动发现（含 KRP-A01 纳管 Karpenter 节点）", Tiers: []string{TierCore, TierRehearsal, TierKarpenter, TierKWOK},
+		ID: "INS-03", Title: "GPU nodes and GPUs are discovered automatically (includes KRP-A01, managing Karpenter nodes)", Tiers: []string{TierCore, TierRehearsal, TierKarpenter, TierKWOK},
 		Needs: []string{NeedTF}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			if env.Mode == ModeNoGPU {
@@ -185,7 +185,7 @@ var _ = Describe("discovery", func() {
 
 var _ = Describe("sharing and bin-packing", func() {
 	Register(Case{
-		ID: "ISO-01", Title: "soft 分片：一张卡上运行多个 Pod", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
+		ID: "ISO-01", Title: "soft fractional sharing: several Pods run on one GPU", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -241,7 +241,7 @@ var _ = Describe("sharing and bin-packing", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-05", Title: "shared 整卡：独占后其它 Pod 不会落到这张卡", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
+		ID: "ISO-05", Title: "shared whole GPU: once it is taken exclusively, no other Pod lands on that GPU", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			env.ensureGPUs(ctx, c, 1)
 			Expect(env.create(ctx, tfPod(c.NS, "whole", wholeGPU(), tfNodeSelector()))).To(Succeed())
@@ -272,7 +272,7 @@ var _ = Describe("sharing and bin-packing", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-14", Title: "soft 模式对业务镜像的要求：无 libstdc++ 的镜像进程无法启动", Tiers: []string{TierRehearsal, TierCore}, Needs: []string{NeedTF, NeedGPU}, Timeout: 15 * time.Minute,
+		ID: "ISO-14", Title: "What soft mode requires of the application image: in an image without libstdc++ the process cannot start", Tiers: []string{TierRehearsal, TierCore}, Needs: []string{NeedTF, NeedGPU}, Timeout: 15 * time.Minute,
 		KnownIssue: "the soft limiter is injected through /etc/ld.so.preload and needs glibc + libstdc++.so.6 in the workload image; on images without it every dynamically linked process exits 127 (<= 2.17.23, vgpu-provider 1.3.9)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -299,7 +299,7 @@ var _ = Describe("sharing and bin-packing", func() {
 	})
 
 	Register(Case{
-		ID: "SCH-01", Title: "默认装箱：小负载集中到一个节点", Tiers: []string{TierCore, TierRehearsal, TierKarpenter}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
+		ID: "SCH-01", Title: "Default bin-packing: small workloads are packed onto one node", Tiers: []string{TierCore, TierRehearsal, TierKarpenter}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 2)
 			nodes := map[string]bool{}
@@ -328,7 +328,7 @@ var _ = Describe("sharing and bin-packing", func() {
 
 var _ = Describe("recovery", func() {
 	Register(Case{
-		ID: "NLC-01", Title: "Hypervisor 重启：业务不中断、GPU 先 Pending 后恢复、不丢账", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
+		ID: "NLC-01", Title: "Hypervisor restart: the application is not interrupted, the GPU goes Pending and then recovers, no accounting is lost", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			Expect(env.create(ctx, tfPod(c.NS, "app", fraction(gpus[0], "soft", 20, 2), tfNodeSelector()))).To(Succeed())
@@ -383,7 +383,7 @@ var _ = Describe("recovery", func() {
 	})
 
 	Register(Case{
-		ID: "NLC-02", Title: "Operator 重启：分配状态重建、无重复分配", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
+		ID: "NLC-02", Title: "Operator restart: allocation state is rebuilt, no double allocation", Tiers: []string{TierCore, TierRehearsal}, Needs: []string{NeedTF, NeedGPU}, Timeout: 25 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]

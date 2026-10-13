@@ -57,7 +57,7 @@ variable "extra_tags" {
 # EKS
 # ---------------------------------------------------------------------------
 variable "kubernetes_version" {
-  description = "EKS Kubernetes version. Must be in STANDARD support, >= the kube-scheduler the operator embeds (k8s.io/kubernetes v1.36.x) and supported by var.karpenter_version. See README 版本选择."
+  description = "EKS Kubernetes version. Must be in STANDARD support, >= the kube-scheduler the operator embeds (k8s.io/kubernetes v1.36.x) and supported by var.karpenter_version. See README, version selection."
   type        = string
   default     = "1.36"
 }

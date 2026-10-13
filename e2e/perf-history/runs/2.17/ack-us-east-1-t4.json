@@ -9,7 +9,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 1,
    "status": "passed",
-   "title": "cluster-agent sidecar 运行（集群注册到控制台）"
+   "title": "cluster-agent sidecar is running (cluster registered with the console)"
   },
   {
    "id": "FIN-01",
@@ -68,7 +68,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 1523,
    "status": "passed",
-   "title": "FinOps：N 个分片负载 vs 整卡基线的节点小时与成本"
+   "title": "FinOps: node-hours and cost of N fractional workloads vs. the whole-GPU baseline"
   },
   {
    "id": "INS-01",
@@ -84,7 +84,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 6,
    "status": "passed",
-   "title": "Helm 安装后控制面就绪"
+   "title": "Control plane is ready after Helm install"
   },
   {
    "id": "INS-02",
@@ -95,7 +95,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 2,
    "status": "passed",
-   "title": "默认集群与 Pool 被调谐（零节点）"
+   "title": "Default cluster and Pool are reconciled (zero nodes)"
   },
   {
    "id": "INS-03",
@@ -106,7 +106,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 14,
    "status": "passed",
-   "title": "GPU 节点与 GPU 自动发现（含 KRP-A01 纳管 Karpenter 节点）"
+   "title": "GPU nodes and GPUs are discovered automatically (includes KRP-A01, managing Karpenter nodes)"
   },
   {
    "id": "INS-04",
@@ -122,7 +122,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 2,
    "status": "passed",
-   "title": "非 GPU 节点不被纳管"
+   "title": "Non-GPU nodes are not managed"
   },
   {
    "id": "ISO-01",
@@ -148,7 +148,7 @@
    "run_id": "ack-core-1",
    "seconds": 40,
    "status": "passed",
-   "title": "soft 分片：一张卡上运行多个 Pod"
+   "title": "soft fractional sharing: several Pods run on one GPU"
   },
   {
    "id": "ISO-02",
@@ -190,7 +190,7 @@
    "run_id": "ack-isolation-2",
    "seconds": 1032,
    "status": "passed",
-   "title": "soft 算力限额实测：吞吐随 share 成比例、无停顿"
+   "title": "soft compute limit, measured: throughput proportional to the share, no stalls"
   },
   {
    "id": "ISO-03",
@@ -212,7 +212,7 @@
    "run_id": "ack-isolation-2",
    "seconds": 50,
    "status": "passed",
-   "title": "显存上限实测：容器内只见配额、超限分配失败、邻居不受影响"
+   "title": "VRAM cap, measured: the container sees only its quota, allocation beyond the limit fails, neighbors are unaffected"
   },
   {
    "id": "ISO-04",
@@ -223,7 +223,7 @@
    "run_id": "ack-isolation-2",
    "seconds": 99,
    "status": "known-fail",
-   "title": "hard 算力限额实测（sidecar worker）"
+   "title": "hard compute limit, measured (sidecar worker)"
   },
   {
    "id": "ISO-05",
@@ -234,7 +234,7 @@
    "run_id": "ack-core-1",
    "seconds": 70,
    "status": "passed",
-   "title": "shared 整卡：独占后其它 Pod 不会落到这张卡"
+   "title": "shared whole GPU: once it is taken exclusively, no other Pod lands on that GPU"
   },
   {
    "id": "ISO-06",
@@ -245,7 +245,7 @@
    "run_id": "ack-core-4",
    "seconds": 21,
    "status": "known-fail",
-   "title": "remote 模式：业务 Pod 在 CPU 节点，经 TensorFusionConnection 使用远端 GPU"
+   "title": "remote mode: the application Pod is on a CPU node and uses a remote GPU through a TensorFusionConnection"
   },
   {
    "id": "ISO-13",
@@ -261,7 +261,7 @@
    "run_id": "ack-isolation-2",
    "seconds": 126,
    "status": "known-fail",
-   "title": "disable-features: gpu-limiter 关闭限流后不再受限"
+   "title": "disable-features: gpu-limiter turns throttling off and the workload is no longer limited"
   },
   {
    "id": "ISO-14",
@@ -272,7 +272,7 @@
    "run_id": "ack-core-1",
    "seconds": 20,
    "status": "known-fail",
-   "title": "soft 模式对业务镜像的要求：无 libstdc++ 的镜像进程无法启动"
+   "title": "What soft mode requires of the application image: in an image without libstdc++ the process cannot start"
   },
   {
    "id": "ISO-15",
@@ -302,7 +302,7 @@
    "run_id": "ack-isolation-3",
    "seconds": 648,
    "status": "passed",
-   "title": "邻居隔离：吵闹的 Pod 不会把安静的 Pod 压到份额以下"
+   "title": "Neighbor isolation: a noisy Pod does not push a quiet Pod below its share"
   },
   {
    "id": "ISO-16",
@@ -333,7 +333,7 @@
    "run_id": "ack-isolation-2",
    "seconds": 571,
    "status": "passed",
-   "title": "运行期调整限额生效（cron 伸缩规则，即 ASC-02）"
+   "title": "Changing the limit at runtime takes effect (cron scaling rule, i.e. ASC-02)"
   },
   {
    "id": "KRP-00",
@@ -344,7 +344,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 1,
    "status": "passed",
-   "title": "Karpenter 就绪：NodePool / EC2NodeClass Ready，nodeOverlay 特性门打开"
+   "title": "Karpenter is ready: NodePool / EC2NodeClass Ready, nodeOverlay feature gate on"
   },
   {
    "id": "KRP-01",
@@ -355,7 +355,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 2,
    "status": "passed",
-   "title": "NodeOverlay 与 operator 的 NodeClaim RBAC 就位"
+   "title": "NodeOverlay and the operator's NodeClaim RBAC are in place"
   },
   {
    "id": "KRP-A02",
@@ -409,7 +409,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 338,
    "status": "passed",
-   "title": "GPU 不足 → 扩容器创建 NodeClaim → 新节点 → Pod 运行（核心闭环）"
+   "title": "Not enough GPU → the expander creates a NodeClaim → new node → Pod runs (the core loop)"
   },
   {
    "id": "KRP-A03",
@@ -452,7 +452,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 343,
    "status": "passed",
-   "title": "一次扩容承接多个 Pending Pod（不是一个 Pod 一台机器）"
+   "title": "One scale-up serves several Pending Pods (not one machine per Pod)"
   },
   {
    "id": "KRP-A08",
@@ -493,7 +493,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 570,
    "status": "passed",
-   "title": "从 0 个 GPU 节点冷启动：Pending 的 TF Pod → Karpenter NodeClaim → 节点 → GPU 注册 → Pod 运行"
+   "title": "Cold start from 0 GPU nodes: Pending TF Pod → Karpenter NodeClaim → node → GPU registered → Pod runs"
   },
   {
    "id": "KRP-A09",
@@ -518,7 +518,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 141,
    "status": "passed",
-   "title": "负载清空后节点被回收（should-delete 标记 + Karpenter consolidation）"
+   "title": "The node is reclaimed after the workloads are gone (should-delete mark + Karpenter consolidation)"
   },
   {
    "id": "KRP-A15",
@@ -529,7 +529,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 113,
    "status": "passed",
-   "title": "chart 默认 NodeOverlay 会让 Karpenter 为 TF Pod 拉起非 TF 节点"
+   "title": "The chart's default NodeOverlay makes Karpenter launch non-TF nodes for TF Pods"
   },
   {
    "id": "KRP-A16",
@@ -551,7 +551,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 1,
    "status": "passed",
-   "title": "扩容节点的 GPU 就绪后，Pending Pod 应及时绑定（不等调度器 5 分钟兜底重试）"
+   "title": "Once the GPU on the scaled-up node is ready, the Pending Pod should be bound promptly (without waiting for the scheduler's 5-minute fallback retry)"
   },
   {
    "id": "KRP-A17",
@@ -594,7 +594,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 644,
    "status": "passed",
-   "title": "N 个整卡 Pod 同时 Pending：恰好扩 N 台（不多扩、不少扩）"
+   "title": "N whole-GPU Pods Pending at the same time: exactly N nodes are added (no more, no fewer)"
   },
   {
    "id": "KRP-B02",
@@ -626,7 +626,7 @@
    "run_id": "ack-karpenter-2",
    "seconds": 298,
    "status": "passed",
-   "title": "路径 B：容量水位 → GPUNodeClaim → 同名 NodeClaim → 节点 → Bound（含 B01 连接检查、B09 删除 Pool 清理）"
+   "title": "Path B: capacity watermark → GPUNodeClaim → NodeClaim of the same name → node → Bound (includes the B01 connection check and the B09 cleanup on Pool deletion)"
   },
   {
    "id": "KRP-B10",
@@ -643,7 +643,7 @@
    "run_id": "ack-karpenter-2",
    "seconds": 2,
    "status": "passed",
-   "title": "路径 B：删除 Pool 后 GPUNodeClaim / NodeClaim / 节点 / GPUNode / GPU 全部回收（接在 KRP-B02 之后）"
+   "title": "Path B: after the Pool is deleted, the GPUNodeClaim / NodeClaim / node / GPUNode / GPU are all reclaimed (runs after KRP-B02)"
   },
   {
    "id": "KRP-C01",
@@ -689,7 +689,7 @@
    "run_id": "ack-smoke-2",
    "seconds": 186,
    "status": "passed",
-   "title": "Karpenter 拉起并回收一台非 GPU 节点（通用 NodePool）"
+   "title": "Karpenter launches and reclaims a non-GPU node (general-purpose NodePool)"
   },
   {
    "id": "NEG-02",
@@ -700,7 +700,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 12,
    "status": "passed",
-   "title": "指定不存在的 pool 在准入被拒"
+   "title": "Specifying a pool that does not exist is rejected at admission"
   },
   {
    "id": "NEG-03",
@@ -711,7 +711,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 13,
    "status": "passed",
-   "title": "本地 hard 不写 sidecar-worker：实际被接受并自动加 sidecar"
+   "title": "Local hard without sidecar-worker: actually accepted, and the sidecar is added automatically"
   },
   {
    "id": "NEG-04",
@@ -722,7 +722,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 18,
    "status": "passed",
-   "title": "partitioned 不带 partition-id 被拒"
+   "title": "partitioned without partition-id is rejected"
   },
   {
    "id": "NEG-05",
@@ -733,7 +733,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 12,
    "status": "passed",
-   "title": "整卡请求缺 gpu-model 被拒"
+   "title": "A whole-GPU request without gpu-model is rejected"
   },
   {
    "id": "NEG-06",
@@ -744,7 +744,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 12,
    "status": "passed",
-   "title": "gang-min-members=1 被拒"
+   "title": "gang-min-members=1 is rejected"
   },
   {
    "id": "NEG-11",
@@ -755,7 +755,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 18,
    "status": "passed",
-   "title": "tflops 与 compute-percent 同时指定：实际被接受，tflops 生效"
+   "title": "tflops and compute-percent specified together: actually accepted, tflops takes effect"
   },
   {
    "id": "NEG-12",
@@ -766,7 +766,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 17,
    "status": "passed",
-   "title": "soft 模式未写任何资源请求被拒"
+   "title": "soft mode without any resource request is rejected"
   },
   {
    "id": "NEG-13",
@@ -777,7 +777,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 12,
    "status": "passed",
-   "title": "非法 isolation / qos 值的报错位置"
+   "title": "Where the error is reported for invalid isolation / qos values"
   },
   {
    "id": "NLC-01",
@@ -794,7 +794,7 @@
    "run_id": "ack-core-2",
    "seconds": 50,
    "status": "passed",
-   "title": "Hypervisor 重启：业务不中断、GPU 先 Pending 后恢复、不丢账"
+   "title": "Hypervisor restart: the application is not interrupted, the GPU goes Pending and then recovers, no accounting is lost"
   },
   {
    "id": "NLC-02",
@@ -811,7 +811,7 @@
    "run_id": "ack-core-1",
    "seconds": 111,
    "status": "passed",
-   "title": "Operator 重启：分配状态重建、无重复分配"
+   "title": "Operator restart: allocation state is rebuilt, no double allocation"
   },
   {
    "id": "NLC-09",
@@ -833,7 +833,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 40,
    "status": "passed",
-   "title": "节点被删除后状态收敛，Deployment 的 Pod 在新节点重建"
+   "title": "State converges after a node is deleted, and the Deployment's Pod is re-created on a new node"
   },
   {
    "id": "OBS-01",
@@ -850,7 +850,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 1,
    "status": "passed",
-   "title": "Operator metrics 端点可抓取"
+   "title": "The operator metrics endpoint can be scraped"
   },
   {
    "id": "OBS-02",
@@ -898,7 +898,7 @@
    "run_id": "ack-core-1",
    "seconds": 388,
    "status": "known-fail",
-   "title": "GPU / worker / 节点 / pool 指标在限定时间内写入 GreptimeDB"
+   "title": "GPU / worker / node / pool metrics are written to GreptimeDB within the time limit"
   },
   {
    "id": "OBS-06",
@@ -914,7 +914,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 1,
    "status": "passed",
-   "title": "GreptimeDB 可通过 HTTP SQL 查询"
+   "title": "GreptimeDB can be queried over HTTP SQL"
   },
   {
    "id": "PERF-CO-01",
@@ -999,7 +999,7 @@
    "run_id": "ack-perf-3",
    "seconds": 558,
    "status": "passed",
-   "title": "切分 + 共调度：两个 vLLM 实例各占 50% 同卡并发，各自的吞吐与尾延迟、合计吞吐"
+   "title": "Fractional sharing + co-scheduling: two vLLM instances at 50% each, concurrent on the same GPU; throughput and tail latency of each, and combined throughput"
   },
   {
    "id": "PERF-LLM-01",
@@ -1111,7 +1111,7 @@
    "run_id": "ack-perf-3",
    "seconds": 1265,
    "status": "passed",
-   "title": "vLLM 流式推理 vs 算力份额（soft）：吞吐成比例、TTFT / TPOT 尾延迟无断崖"
+   "title": "vLLM streaming inference vs. compute share (soft): throughput proportional, no cliff in TTFT / TPOT tail latency"
   },
   {
    "id": "PERF-LLM-02",
@@ -1122,7 +1122,7 @@
    "run_id": "ack-perf-3",
    "seconds": 1772,
    "status": "known-fail",
-   "title": "vLLM 流式推理 vs 算力份额（hard）"
+   "title": "vLLM streaming inference vs. compute share (hard)"
   },
   {
    "id": "PERF-MLP-01",
@@ -1164,7 +1164,7 @@
    "run_id": "ack-perf-7",
    "seconds": 543,
    "status": "failed",
-   "title": "MLPerf Inference 风格（LoadGen Offline / Server，缩减时长，非合规提交）vs 份额"
+   "title": "MLPerf Inference style (LoadGen Offline / Server, shortened duration, not a compliant submission) vs. share"
   },
   {
    "id": "PERF-ORT-01",
@@ -1236,7 +1236,7 @@
    "run_id": "ack-perf-7",
    "seconds": 992,
    "status": "passed",
-   "title": "ONNX Runtime (CUDA EP)：CNN / 编码器 / 语音编码器的 QPS 与延迟分位 vs 份额"
+   "title": "ONNX Runtime (CUDA EP): QPS and latency percentiles of a CNN / encoder / speech encoder vs. share"
   },
   {
    "id": "PERF-TB-01",
@@ -1338,7 +1338,7 @@
    "run_id": "ack-perf-5",
    "seconds": 465,
    "status": "failed",
-   "title": "TorchBench 代表性子集（conv / transformer / 小 kernel 密集）vs 份额"
+   "title": "Representative TorchBench subset (conv / transformer / small-kernel-heavy) vs. share"
   },
   {
    "id": "SCH-01",
@@ -1354,7 +1354,7 @@
    "run_id": "ack-karpenter-1",
    "seconds": 45,
    "status": "passed",
-   "title": "默认装箱：小负载集中到一个节点"
+   "title": "Default bin-packing: small workloads are packed onto one node"
   },
   {
    "id": "SCH-04",
@@ -1370,7 +1370,7 @@
    "run_id": "ack-core-1",
    "seconds": 85,
    "status": "passed",
-   "title": "按 GPU 型号调度：匹配的型号可调度，不存在的型号保持 Pending"
+   "title": "Scheduling by GPU model: a matching model is schedulable, a model that does not exist stays Pending"
   },
   {
    "id": "SCH-10",
@@ -1381,7 +1381,7 @@
    "run_id": "ack-core-1",
    "seconds": 40,
    "status": "passed",
-   "title": "命名空间配额拦截超限请求"
+   "title": "The namespace quota blocks requests over the limit"
   },
   {
    "id": "SCH-11",
@@ -1398,7 +1398,7 @@
    "run_id": "ack-core-1",
    "seconds": 27,
    "status": "passed",
-   "title": "Gang 调度（正向）：成员齐备后一起运行，注解与状态可见"
+   "title": "Gang scheduling (positive): members run together once all are present; annotations and status are visible"
   },
   {
    "id": "SCH-12",
@@ -1420,7 +1420,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 1,
    "status": "passed",
-   "title": "分配查询与扩容器状态 API 可用"
+   "title": "The allocation query and expander status APIs are available"
   },
   {
    "id": "SCH-14",
@@ -1436,7 +1436,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 18,
    "status": "passed",
-   "title": "自动分配 HostPort"
+   "title": "HostPort is assigned automatically"
   },
   {
    "id": "WHK-01",
@@ -1447,7 +1447,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 18,
    "status": "passed",
-   "title": "只加 label + annotation 即被改写"
+   "title": "Adding only the label + annotation is enough for the Pod to be mutated"
   },
   {
    "id": "WHK-02",
@@ -1458,7 +1458,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 13,
    "status": "passed",
-   "title": "引用 WorkloadProfile，annotation 可覆盖"
+   "title": "Referencing a WorkloadProfile; annotations can override it"
   },
   {
    "id": "WHK-03",
@@ -1469,7 +1469,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 13,
    "status": "passed",
-   "title": "多容器 Pod 只注入指定容器"
+   "title": "In a multi-container Pod only the specified container is injected"
   },
   {
    "id": "WHK-05",
@@ -1480,7 +1480,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 18,
    "status": "passed",
-   "title": "enabled-replicas 只接入部分副本"
+   "title": "enabled-replicas onboards only some of the replicas"
   },
   {
    "id": "WHK-06",
@@ -1491,7 +1491,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 13,
    "status": "passed",
-   "title": "未启用的 Pod 完全不被改动"
+   "title": "A Pod that is not enabled is not modified at all"
   },
   {
    "id": "WHK-07",
@@ -1513,7 +1513,7 @@
    "run_id": "ack-core-1",
    "seconds": 24,
    "status": "passed",
-   "title": "删除负载后 TensorFusionWorkload 与 GPU 资源归还"
+   "title": "After the workload is deleted, the TensorFusionWorkload and the GPU resources are returned"
   },
   {
    "id": "WHK-08",
@@ -1524,7 +1524,7 @@
    "run_id": "ack-smoke-1",
    "seconds": 34,
    "status": "passed",
-   "title": "server-side dry-run 不产生副作用"
+   "title": "server-side dry-run has no side effects"
   }
  ],
  "cluster": {
@@ -1536,12 +1536,12 @@
  },
  "date": "2026-10-13",
  "env": "ack-us-east-1-t4",
- "label": "阿里云 ACK us-east-1 · T4 (ecs.gn6i)",
+ "label": "Alibaba Cloud ACK us-east-1 · T4 (ecs.gn6i)",
  "notes": [
-  "首次真实 GPU 留档。性能点全部在 operator / hypervisor 2.17.30 上测得；功能用例跨 2.17.28 ～ 2.17.30 执行，逐条版本见 e2e/ack/TEST-SUMMARY.md。",
-  "vLLM 0.11.0，Qwen2.5-0.5B-Instruct，每租户 6Gi 显存，8 路并发，90 s 预热 + 60 s 窗口；原生基线使用与租户相同的显存预算。",
-  "机器指标来自 tf_gpu_usage，每分钟一个样本，多数测量点窗口内只有 1 个样本。",
-  "hard 隔离与 remote 模式因 community worker 缺 License 无法运行，没有数据。"
+  "First record on real GPUs. All performance points were measured on operator / hypervisor 2.17.30; the functional cases ran across 2.17.28 to 2.17.30, see e2e/ack/TEST-SUMMARY.md for the version of each case.",
+  "vLLM 0.11.0, Qwen2.5-0.5B-Instruct, 6Gi VRAM per tenant, 8 concurrent streams, 90 s warm-up + 60 s window; the native baseline uses the same VRAM budget as a tenant.",
+  "Machine metrics come from tf_gpu_usage, one sample per minute; most measurement points have only 1 sample in the window.",
+  "Hard isolation and remote mode cannot run because the community worker has no License; there is no data for them."
  ],
  "points": [
   {

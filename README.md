@@ -40,11 +40,22 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 - [Run vGPU in VM Hypervisor](https://tensor-fusion.ai/guide/getting-started/deployment-vm)
 - [Learn Essential Concepts & Architecture](https://tensor-fusion.ai/guide/getting-started/architecture)
 
+### 🧩 Architecture
+
+This repository builds the two components that run in your cluster:
+
+- **Controller**: the CRD controllers, the Pod mutating webhook, and a GPU-aware scheduler built on kube-scheduler, in one Deployment. It also drives node scaling, directly through cloud APIs or through Karpenter.
+- **Hypervisor**: a DaemonSet Pod on every GPU node, written in Go. It discovers devices through vendor accelerator libraries, reports them as `GPU` and `GPUNode` resources, and enforces each workload's compute and VRAM limits.
+
+A workload asks for a fraction of a GPU with Pod annotations. The webhook injects what the chosen isolation mode needs (`shared`, `soft`, `hard`, or `partitioned`), the scheduler picks the GPU, and the hypervisor enforces the limits. Metrics are written to a GreptimeDB instance inside the cluster.
+
+[`docs/stack-context.md`](./docs/stack-context.md) describes every component, the repository that builds it, and the contracts between them. [`docs/installation-guide.md`](./docs/installation-guide.md) covers installation and Helm values.
+
 ### 💬 Discussion
 
 - Discord channel: [https://discord.gg/2bybv9yQNk](https://discord.gg/2bybv9yQNk)
 - Discuss anything about TensorFusion: [Github Discussions](https://github.com/NexusGPU/tensor-fusion/discussions)
-- Contact us with WeCom for Greater China region: [企业微信](https://work.weixin.qq.com/ca/cawcde42751d9f6a29)
+- Contact us with WeCom for Greater China region: [WeCom](https://work.weixin.qq.com/ca/cawcde42751d9f6a29)
 - Email us: [support@tensor-fusion.com](mailto:support@tensor-fusion.com)
 - Schedule [1:1 meeting with TensorFusion founders](https://tensor-fusion.ai/book-demo)
 
@@ -104,8 +115,14 @@ Don't forget to give the project a star! Thanks again!
 This project patches Kubernetes scheduler components. Before building or running tests, you need to vendor dependencies and apply patches:
 
 ```bash
-make vendor  # Vendor dependencies and apply scheduler patches
+make vendor             # Vendor dependencies and apply scheduler patches
+make build              # Build the controller
+make build-hypervisor   # Build the hypervisor
+make test               # Run the test suite (envtest)
+make ut F=<file>        # Run one controller test file
 ```
+
+End-to-end tests against real clusters are in [`e2e/`](./e2e/README.md): Amazon EKS with Karpenter, and Alibaba Cloud ACK with Karpenter on real GPU nodes.
 
 
 ### How to Contribute
@@ -127,7 +144,7 @@ make vendor  # Vendor dependencies and apply scheduler patches
 ## 🔷 License
 
 1. [TensorFusion main repo](https://github.com/NexusGPU/tensor-fusion) is open sourced with [Apache 2.0 License](./LICENSE), which includes **GPU pooling, scheduling, management features**, you can use it for free and customize it as you want.
-2. [vgpu.rs repo](https://github.com/NexusGPU/vgpu.rs) is open sourced with [Apache 2.0 License](./LICENSE), which includes **Fractional GPU** and **vGPU hypervisor features**, you can use it for free and customize it as you want.
+2. The **vGPU hypervisor** is part of this repository since v2 (`cmd/hypervisor`, `pkg/hypervisor`) and is covered by the same license. The [vgpu.rs repo](https://github.com/NexusGPU/vgpu.rs), which held the original Rust hypervisor and **Fractional GPU** limiter, is open sourced with the Apache 2.0 License as well.
 3. **Advanced GPU virtualization and GPU-over-IP sharing features** are also free to use when **GPU total number of your organization is less than 10**, but the implementation is not fully open sourced, please [contact us](mailto:support@tensor-fusion.com) for more details.
 4. Features mentioned in "**Enterprise Features**" above are paid, **licensed users can use these features in [TensorFusion Console](https://app.tensor-fusion.ai)**.
 5. For large scale deployment that involves non-free features of #3 and #4, please [contact us](mailto:support@tensor-fusion.com), pricing details are available [here](https://tensor-fusion.ai/pricing)
@@ -145,7 +162,7 @@ make vendor  # Vendor dependencies and apply scheduler patches
 [issues-shield]: https://img.shields.io/github/issues/NexusGPU/tensor-fusion.svg?style=for-the-badge
 [issues-url]: https://github.com/NexusGPU/tensor-fusion/issues
 [license-shield]: https://img.shields.io/github/license/NexusGPU/tensor-fusion.svg?style=for-the-badge
-[license-url]: https://github.com/NexusGPU/tensor-fusion/blob/master/LICENSE
+[license-url]: https://github.com/NexusGPU/tensor-fusion/blob/main/LICENSE
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: https://www.linkedin.com/company/tensor-fusion/about
 

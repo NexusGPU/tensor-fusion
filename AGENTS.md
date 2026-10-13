@@ -1,49 +1,53 @@
-# TensorFusion Operator
+# TensorFusion
 
-GPU 虚拟化与池化的 Kubernetes operator。一个仓库产出两个二进制：controller（CRD 控制器、Pod webhook、内嵌 kube-scheduler）和节点 hypervisor（fractional GPU 的控制面）。
+A Kubernetes operator for GPU virtualization and pooling. This repository builds two binaries:
 
-## 先读哪里
+- **controller** (`cmd/main.go`): CRD controllers, the Pod mutating webhook, and an embedded kube-scheduler, in one process.
+- **hypervisor** (`cmd/hypervisor`): the per-node agent that discovers devices and enforces fractional GPU limits. It is written in Go and replaced the Rust hypervisor from `vgpu.rs`.
 
-- 整个技术栈、相关仓库、跨仓库契约：[`docs/stack-context.md`](docs/stack-context.md)。涉及镜像、limiter、client/worker、控制台的问题，先看这份，再决定是否需要去别的仓库。
-- 安装与 Helm values：`docs/installation-guide.md`
-- 隔离模式设计：`docs/dynamic-gpu-isolation-design.md`、`docs/soft-isolation-preload.md`
-- 调度设计：`design/gputopo_scheduler_design_cn.md`
-- EKS 演示与端到端用例：`e2e/README.md`、`e2e/terraform/README.md`
+The vendor libraries it loads (`vgpu-provider`), the client and worker used for hard isolation and remote GPUs (`tensor-fusion-core`), and the console (`tensor-fusion-cloud`) live in other repositories. [`docs/stack-context.md`](docs/stack-context.md) maps the whole stack and the contracts between repositories; read it before touching images, the limiter, client/worker, or anything the console consumes.
 
-## 代码地图
+Write code, comments, commit messages, and documentation in English.
 
-| 想改什么 | 去哪里 |
+## Where things are
+
+| To change | Go to |
 | --- | --- |
-| CRD 字段 | `api/v1/`，改完跑 `make manifests generate`，chart 里的 CRD 在 `charts/tensor-fusion/crds/` |
-| Pod 注入（limiter、client、worker、环境变量、挂载） | `internal/webhook/v1/`、`internal/utils/compose.go` |
-| 调度与 GPU 分配 | `internal/scheduler/`、`internal/gpuallocator/` |
-| 节点伸缩、Karpenter | `internal/controller/gpupool_node_provision.go`、`gpunodeclaim_controller.go`、`internal/cloudprovider/`、`internal/scheduler/expander/` |
-| 算力 / 显存限额的执行 | `pkg/hypervisor/worker/`（共享内存布局在 `state/`，控制环在 `computing/`） |
-| 设备发现、厂商适配 | `pkg/hypervisor/device/`、`provider/`、`pkg/constants/vendors.go` |
-| 注解名、环境变量名 | `pkg/constants/` |
+| CRD fields | `api/v1/`, then `make manifests generate`; the chart's copies are in `charts/tensor-fusion/crds/` |
+| What gets injected into a Pod | `internal/webhook/v1/`, `internal/utils/compose.go` |
+| Scheduling and GPU allocation | `internal/scheduler/`, `internal/gpuallocator/` |
+| Node scaling, Karpenter | `internal/controller/gpupool_node_provision.go`, `gpunodeclaim_controller.go`, `internal/cloudprovider/`, `internal/scheduler/expander/` |
+| Enforcing compute and VRAM limits | `pkg/hypervisor/worker/` (shared memory layout in `state/`, control loop in `computing/`) |
+| Device discovery, vendors | `pkg/hypervisor/device/`, `provider/`, `pkg/constants/vendors.go` |
+| Annotation and environment variable names | `pkg/constants/` |
+| Metrics and alerts | `internal/metrics/`, `internal/alert/` |
 | Helm chart | `charts/tensor-fusion/` |
+| End-to-end tests on real clusters | `e2e/` (EKS: `e2e/terraform/`, ACK with real GPUs: `e2e/ack/`) |
 
-## 常用命令
+Design documents: `docs/dynamic-gpu-isolation-design.md`, `docs/soft-isolation-preload.md`, `design/`. Installation and Helm values: `docs/installation-guide.md`.
+
+## Commands
 
 ```bash
 make build              # controller
-make build-hypervisor   # hypervisor（CGO 关闭，purego）
-make build-provider     # example accelerator 库
-make test               # envtest 全量
-make ut F=<文件>        # 单个测试文件
-make ut-sched           # 调度器测试
+make build-hypervisor   # hypervisor (CGO disabled, purego)
+make build-provider     # example accelerator library
+make test               # full envtest suite
+make ut F=<file>        # one test file under internal/controller
+make ut-sched           # scheduler tests
+make test-chart         # render the chart and check what it ships
 make lint
-make vendor             # 重新 vendor 并应用 patches/ 下的调度器补丁
+make vendor             # re-vendor and apply the scheduler patches in patches/
 ```
 
-## 需要知道的约束
+## Constraints
 
-- `vendor/` 里的 kube-scheduler 被 `patches/` 修改过，不要直接手改 vendor，改补丁后跑 `make vendor`。
-- soft 隔离的共享内存布局同时定义在本仓库、`vgpu-provider`、`vgpu.rs` 三处，没有版本字段，改动必须三方同步。
-- `pkg/hypervisor` 和 `api/v1` 被 `gpu-go` 作为库引用，导出接口的变更是破坏性变更。
-- `provider/*.h` 是 `vgpu-provider` 头文件的手工拷贝。
-- CRD、Helm values、指标表、注解发生变更时，`tensor-fusion-cloud`（控制台）和 `tensor-fusion-site`（文档）需要跟着改。
+- `vendor/` holds a patched kube-scheduler. Do not edit it by hand: change the patch in `patches/`, then run `make vendor`.
+- The shared memory layout for soft isolation is defined in this repository, in `vgpu-provider`, and in `vgpu.rs`. It has no version field, so all three must change together.
+- `pkg/hypervisor` and `api/v1` are imported as libraries by `gpu-go`. Changing an exported interface there is a breaking change.
+- `provider/*.h` are hand-copied from `vgpu-provider`.
+- A change to CRDs, Helm values, metric tables, or annotations needs a matching change in the console (`tensor-fusion-cloud`) and the documentation (`tensor-fusion-website`).
 
-## 敏感信息
+## Sensitive information
 
-这是公开仓库。密钥、token、kubeconfig、连接串、内网地址、云账号 ID、未修复安全问题的利用细节一律不入库。本地笔记写在 `tmp.*` 文件里，`.gitignore` 已忽略。
+This repository is public. Never commit keys, tokens, kubeconfigs, connection strings, internal addresses, cloud account IDs, or exploit details of an unfixed security issue. Keep local notes in `tmp.*` files, which `.gitignore` excludes.

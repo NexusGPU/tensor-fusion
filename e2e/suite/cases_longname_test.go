@@ -22,7 +22,7 @@ func hypervisorPodName(node string) string {
 
 var _ = Describe("long node names", func() {
 	Register(Case{
-		ID: "NLC-10", Title: "节点名超过 63 个字符：GPU 仍能注册、被选中、被调度",
+		ID: "NLC-10", Title: "Node name longer than 63 characters: the GPU still registers, is selected and is scheduled",
 		Tiers: []string{TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedGPU}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			// The KWOK provider names a node kwok-<nodeclaim>-<two words>-<n>-

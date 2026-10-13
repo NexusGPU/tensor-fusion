@@ -19,7 +19,7 @@ import (
 
 var _ = Describe("scheduling", func() {
 	Register(Case{
-		ID: "SCH-04", Title: "按 GPU 型号调度：匹配的型号可调度，不存在的型号保持 Pending", Tiers: []string{TierCore, TierRehearsal},
+		ID: "SCH-04", Title: "Scheduling by GPU model: a matching model is schedulable, a model that does not exist stays Pending", Tiers: []string{TierCore, TierRehearsal},
 		Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -49,7 +49,7 @@ var _ = Describe("scheduling", func() {
 	})
 
 	Register(Case{
-		ID: "SCH-11", Title: "Gang 调度（正向）：成员齐备后一起运行，注解与状态可见", Tiers: []string{TierCore, TierRehearsal},
+		ID: "SCH-11", Title: "Gang scheduling (positive): members run together once all are present; annotations and status are visible", Tiers: []string{TierCore, TierRehearsal},
 		Needs: []string{NeedTF, NeedGPU}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
@@ -82,7 +82,7 @@ var _ = Describe("scheduling", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-06", Title: "remote 模式：业务 Pod 在 CPU 节点，经 TensorFusionConnection 使用远端 GPU", Tiers: []string{TierCore},
+		ID: "ISO-06", Title: "remote mode: the application Pod is on a CPU node and uses a remote GPU through a TensorFusionConnection", Tiers: []string{TierCore},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
 		KnownIssue: "the remote worker of the default ProviderConfig (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the pod goes into CrashLoopBackOff with exit code 0; neither the chart nor the operator has a setting that hands it a license, so the client never gets a GPU (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
@@ -126,7 +126,7 @@ var _ = Describe("scheduling", func() {
 
 var _ = Describe("cloud console", func() {
 	Register(Case{
-		ID: "CLD-01", Title: "cluster-agent sidecar 运行（集群注册到控制台）", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
+		ID: "CLD-01", Title: "cluster-agent sidecar is running (cluster registered with the console)", Tiers: []string{TierSmoke}, Needs: []string{NeedTF}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			dep, err := env.get(ctx, gvkDeployment, env.TFNamespace, env.TFRelease+"-controller")
 			Expect(err).NotTo(HaveOccurred())
@@ -162,7 +162,7 @@ var _ = Describe("cloud console", func() {
 
 var _ = Describe("uninstall", func() {
 	Register(Case{
-		ID: "UPG-03", Title: "卸载脚本清理干净（CR、CRD、webhook、NodeOverlay、节点 label 与 index 容量）", Tiers: []string{TierDisrupt},
+		ID: "UPG-03", Title: "The uninstall script cleans up completely (CRs, CRDs, webhook, NodeOverlay, node labels and index capacity)", Tiers: []string{TierDisrupt},
 		Needs: []string{NeedTF}, NoNS: true, Timeout: 25 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			script := filepath.Join(env.RepoRoot, "scripts", "uninstall.sh")
