@@ -6,9 +6,11 @@
 #
 # Optional local inputs under ${ACK_HOME} (git-ignored), picked up when present:
 #   images/*.tar    `docker save` archives loaded onto the system node before the
-#                   installs (development builds no registry carries)
-#   stack.env       plain KEY=VALUE lines exported for the installs, e.g.
-#                   KARPENTER_ALIBABA_IMAGE=..., TF_OPERATOR_TAG=..., TF_RELEASE_TAG=...
+#                   installs (development builds no registry carries). images/karpenter.tar
+#                   (the patched provider, KARPENTER_ALIBABA_IMAGE) is built by
+#                   build-karpenter.sh when it is missing.
+#   stack.env       plain KEY=VALUE lines exported for every stage, e.g.
+#                   TF_RELEASE_TAG=..., TF_OPERATOR_TAG=..., TF_AGENT_TAG=...
 #   agent.env       TF_AGENT_ID / TF_ENROLL_TOKEN of the cloud console environment
 #                   (mode 600; never printed)
 
@@ -28,11 +30,16 @@ load_env() {
 case "${1:-}" in
   up)
     start=$(date +%s)
+    load_env
+    # The published provider image over-provisions GPU nodes (README pitfall 6):
+    # build the patched one before anything costs money.
+    if [ "${KARPENTER_ALIBABA_IMAGE#tf-e2e/}" != "${KARPENTER_ALIBABA_IMAGE}" ] && [ ! -s "${ACK_HOME}/images/karpenter.tar" ]; then
+      bash "${ACK_DIR}/build-karpenter.sh" --no-load >/dev/null
+    fi
     bash "${ACK_DIR}/up.sh"
     for tar in "${ACK_HOME}"/images/*.tar; do
       [ -f "$tar" ] && bash "${ACK_DIR}/load-image.sh" "$tar"
     done
-    load_env
     # The image cache first: everything installed after it is pulled through it.
     bash "${ACK_DIR}/registry.sh"
     bash "${ACK_DIR}/install.sh"
