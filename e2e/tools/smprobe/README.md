@@ -73,3 +73,4 @@ The kernel is written in PTX (`smprobe.ptx`) and embedded twice: as precompiled 
 | `smprobe.ptx` | The probe kernel |
 | `kernels.h` | Generated: the PTX text and the cubins for sm_50 to sm_120 |
 | `build.sh` | Build script |
+| `publish.sh` | Uploads the built binary to an OSS bucket as public-read objects: `SMPROBE_BUCKET=<bucket> ./publish.sh` prints the download URL |

@@ -14,6 +14,7 @@ make ack-up                              # VPC + cluster + Karpenter + TensorFus
 export KUBECONFIG=$PWD/ack/.work/kubeconfig
 make ack-test TIER=smoke                 # any tier: smoke | core | isolation | karpenter-finops | perf-quick
 make ack-test TIER=core FOCUS='ISO-01'   # a single case
+make ack-warm                            # optional: one T4 node up with the demo images pulled (ARGS=down to release it)
 make ack-sweep                           # list the cloud resources of this environment that currently exist
 make ack-down                            # tear down and check for leftovers
 ```
@@ -40,19 +41,22 @@ VPC 10.43.0.0/16 (2 vSwitches / 2 zones, NAT gateway + EIP for egress)
 | `up.sh` | VPC, vSwitches, cluster, system node pool, kubeconfig |
 | `install.sh` | Karpenter's RAM role, chart, ECSNodeClass, NodePool |
 | `install-tf.sh` | TensorFusion chart, with the image tag passed explicitly; the console agent's credentials go from environment variables into a Secret |
-| `build-karpenter.sh` | Builds the provider with `patches/` and imports it onto the system node |
+| `build-karpenter.sh` | Builds the provider with `patches/`, saves it as `.work/images/karpenter.tar` and imports it onto the system node. `run.sh up` calls it when the archive is missing (needs docker, git, go) |
 | `registry.sh` | The image cache inside the cluster: a pull-through registry on the system node for `docker.io`, `quay.io`, `registry.k8s.io` and `ghcr.io`, which every node's containerd tries first. See "Image cache" |
 | `load-image.sh` | Imports a local image (or a `docker save` archive) into containerd on the system node |
+| `warm.sh` | A placeholder pod (`default/tf-warm`) that keeps one GPU node up with `WARM_IMAGES` pulled, before a demo; `make ack-warm` |
 | `guard.sh` | Cost guard |
 | `down.sh` | Deletes all resources by name and tag, then checks for leftovers |
 
-`run.sh up` reads three local inputs under `ack/.work/` (none of them is committed): `images/*.tar` (development builds that no image registry hosts), `stack.env` (e.g. `KARPENTER_ALIBABA_IMAGE=`, `TF_OPERATOR_TAG=`), and `agent.env` (`TF_AGENT_ID` / `TF_ENROLL_TOKEN` of the console environment, mode 600).
+`run.sh up` reads three local inputs under `ack/.work/` (none of them is committed): `images/*.tar` (development builds that no image registry hosts; `images/karpenter.tar`, the patched Karpenter provider, is built when missing), `stack.env` (e.g. `TF_RELEASE_TAG=`, `TF_OPERATOR_TAG=`, `TF_AGENT_TAG=`), and `agent.env` (`TF_AGENT_ID` / `TF_ENROLL_TOKEN` of the console environment, mode 600). With `agent.env` in place, a new stack reconnects to the same console environment; the environment record stays in the console while the stack is down and shows as disconnected.
+
+To run a development build of the controller or the console agent, save it into `images/`, set `TF_OPERATOR_TAG` / `TF_AGENT_TAG` in `stack.env` and rerun `install-tf.sh`. An image swapped with `kubectl set image` is lost on the next helm upgrade and on a rebuilt stack.
 
 The vGPU worker license, which hard isolation and remote mode need, is read from `TF_LICENSE` / `TF_LICENSE_SIGN` in the environment or from the file `TF_LICENSE_FILE` (default `~/.config/tensor-fusion/license.env`, mode 600; set another path in `stack.env`). `install-tf.sh` stores it in the Secret `tensor-fusion-license` and points the worker at it; the suite puts the same Secret into every case namespace. Without a license the stack is installed as before and the cases that need one are skipped with that reason. See `tools/tf-license.sh`.
 
 ## Image cache
 
-A new GPU node pulls its images through the NAT gateway of the VPC: 200 Mbit/s, shared by all nodes. `vllm/vllm-openai:v0.11.0` (12 GB on disk) took 12 minutes that way, of the 20 minutes between a pending pod and a ready model server on a new T4 (VM boot to GPU registered: 5.5 minutes; model download and load: 3). `registry.sh` takes the pull out of that path:
+A new GPU node pulls its images through the NAT gateway of the VPC: 200 Mbit/s, shared by all nodes (ACK creates the gateway and its EIP; the account refuses a higher bandwidth). `vllm/vllm-openai:v0.11.0` (12 GB on disk) took 12 minutes that way, of the 20 minutes between a pending pod and a ready model server on a new T4 (VM boot to GPU registered: 5.5 minutes; model download and load: 3). `registry.sh` takes the pull out of that path:
 
 - One pod on the system node (namespace `tf-registry`, host network) runs CNCF Distribution as a pull-through cache, one instance per upstream registry, on ports 5000 to 5003. What it served stays on the node's local disk.
 - A sidecar copies new layers to an OSS bucket through the S3-compatible API over the internal network, and an init container restores the local disk from the bucket. The bucket is kept by `make ack-down`, so the next stack starts with a filled cache; `ack/registry.sh purge` removes it.
@@ -69,13 +73,14 @@ Measured on 2026-10-13 with `vllm/vllm-openai:v0.11.0` on a new `ecs.gn6i-c4g1.x
 - NodePool `limits`: at most 3 GPUs, and at most 8 cores in the CPU pool.
 - `guard.sh` (started in the background by `run.sh up`, log in `ack/.work/guard.log`) does the following every 2 minutes: it terminates ECS instances that have no NodeClaim and do not belong to a node pool (only once they have existed for more than 5 minutes); when there are more than 4 GPU instances, it sets the limits of all NodePools to 0 and deletes the GPUNodeClaims of path B. Lifting the freeze is a human decision (re-run `install.sh`).
 - The cost guard is a local process and does not work while the machine is asleep. **This environment has no cloud-side timeout self-destruct like the EKS stack has**; run `make ack-down` when you are done.
-- Idle cost: system node + NAT gateway + SLB + EIP, about $0.25/h; each T4 node is about $1.09/h (us-east-1 on-demand list price, see `../pricing/alibaba-us-east-1.json`).
+- Idle cost: system node + NAT gateway + SLB + EIP, about $0.25/h; each T4 node is about $1.09/h (us-east-1 on-demand list price, see `../pricing/alibaba-us-east-1.json`). The bill of 2026-10-14 agrees: about 44 CNY a day with no GPU node (system node 26, its 200 GiB disk 6.7, NAT gateway 7, CLB 3, EIPs 1.4).
+- After `make ack-down` what remains is the image cache bucket and its RAM user (storage only, a few cents a day for about 20 GB), the ACK service roles (free), and the console environment.
 
 ## Pitfalls encountered
 
 | # | Symptom | Handling |
 |---|---|---|
-| 1 | `CreateCluster` fails with `ErrKubernetesAuditRoleNotAttach` / `AddonRoleNotAuthorized`: the account has not authorized ACK's service roles | A one-time account-level authorization (RAM console, or follow the link in the error). It is not part of this stack and `down.sh` does not delete it |
+| 1 | `CreateCluster` fails with `ErrKubernetesAuditRoleNotAttach` / `AddonRoleNotAuthorized`: the account has not authorized ACK's service roles | `up.sh` creates the missing ones (`ACK_SERVICE_ROLES`, each trusted by `cs.aliyuncs.com` with the system policy `<role>Policy`), the same as the console's one-time authorization. They are account-level, free, and `down.sh` does not delete them |
 | 2 | Node pool creation fails with `CgroupV1NotSupport`: Kubernetes ≥ 1.35 does not accept cgroup v1 nodes, and the `AliyunLinux3` image is cgroup v1 | Use `AliyunLinux3ContainerOptimized` as the node image; the node pool is created separately, so on failure only the node pool has to be replaced |
 | 3 | Karpenter panics at startup: `unknown feature gate "NodeOverlay"` | The chart's `settings.featureGates` also becomes the `--feature-gates` flag, which the provider parses with its own list. Set it only through the `FEATURE_GATES` environment variable |
 | 4 | `RunInstances` fails with `InvalidUser.PassRoleForbidden` | `ram:PassRole` scoped by role ARN is not accepted; use `Resource: *` with the condition `acs:Service=ecs.aliyuncs.com` |

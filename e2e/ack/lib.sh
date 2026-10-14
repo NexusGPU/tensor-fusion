@@ -19,7 +19,8 @@ REPO_ROOT="$(cd "${ACK_DIR}/../.." && pwd)"
 : "${ACK_POD_CIDR:=172.20.0.0/16}"              # Flannel
 : "${ACK_SERVICE_CIDR:=172.21.0.0/20}"
 : "${ACK_SYSTEM_INSTANCE_TYPE:=ecs.g7.xlarge}"  # 4 vCPU / 16 GiB: ACK add-ons + Karpenter + TF controller + GreptimeDB
-: "${ACK_SYSTEM_DISK_GB:=160}"                # system node disk: the image cache (registry.sh) keeps its layers there
+: "${ACK_SYSTEM_DISK_GB:=160}"                # system node disk: the image cache (registry.sh) keeps its layers there.
+                                                # 80 filled up after one day; 74 GB were in use after two days of demos
 : "${ACK_IMAGE_TYPE:=AliyunLinux3ContainerOptimized}" # node image family; must be cgroup v2 (Kubernetes >= 1.35)
 : "${ACK_KEY_PAIR:=tensor-fusion-shared}"       # existing ECS key pair of the region (node login)
 : "${ACK_GPU_INSTANCE_TYPES:=ecs.gn6i-c4g1.xlarge ecs.gn6i-c8g1.2xlarge}" # 1 x T4 each
@@ -33,6 +34,15 @@ REPO_ROOT="$(cd "${ACK_DIR}/../.." && pwd)"
 : "${KARPENTER_ALIBABA_CHART_REF:=67a27fd141a777527ac8ce0c66f1e98ab12b04d3}" # commit that carries helm-charts/karpenter-<version>.tgz (added after the tag)
 : "${KARPENTER_ALIBABA_REPO:=https://github.com/AliyunContainerService/karpenter-provider-alibabacloud}"
 : "${KARPENTER_ROLE:=${ACK_NAME}-karpenter}"    # RAM role assumed by the Karpenter ServiceAccount (RRSA)
+# The provider image. The default is the build of build-karpenter.sh (the published
+# image launches one GPU node per provisioning round for a TF pod, pitfall 6 of
+# README.md); run.sh builds it when ${ACK_HOME}/images/karpenter.tar is missing.
+# Set it to an empty string to install the published image of the chart.
+: "${KARPENTER_ALIBABA_IMAGE=tf-e2e/karpenter-provider-alibabacloud:v${KARPENTER_ALIBABA_VERSION}-tf1}"
+# ACK's service roles: authorized once per account (the console's one-click
+# authorization), trusted by cs.aliyuncs.com, each with the system policy
+# <role>Policy. up.sh creates the missing ones; down.sh never deletes them.
+: "${ACK_SERVICE_ROLES:=AliyunCSDefaultRole AliyunCSManagedKubernetesRole AliyunCSServerlessKubernetesRole AliyunCSClusterRole AliyunCISDefaultRole AliyunCSKubernetesAuditRole AliyunCSManagedLogRole AliyunCSManagedCmsRole AliyunCSManagedCsiRole AliyunCSManagedCsiProvisionerRole AliyunCSManagedCsiPluginRole AliyunCSManagedNetworkRole AliyunCSManagedArmsRole}"
 
 ROLE_LABEL="e2e.tensor-fusion.ai/role"
 SHARED_POOL_LABEL="e2e.tensor-fusion.ai/shared-pool"

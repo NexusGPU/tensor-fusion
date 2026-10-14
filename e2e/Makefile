@@ -127,6 +127,10 @@ ack-up: ## ACK: VPC + ACK managed cluster + Karpenter (Alibaba Cloud provider) +
 ack-registry: ## ACK: install or update the in-cluster image cache (also part of ack-up); ARGS="status" | "warm <image>..." | "purge"
 	@bash ack/registry.sh $(ARGS)
 
+.PHONY: ack-warm
+ack-warm: ## ACK: keep one GPU node warm with the demo images (placeholder pod); ARGS="down" | "status"
+	@bash ack/warm.sh $(or $(ARGS),up)
+
 .PHONY: ack-test
 ack-test: ## ACK: run a tier against the ACK cluster: make ack-test TIER=core|isolation|karpenter-finops|perf-quick|smoke [FOCUS=..]
 	@$(ACK_TEST_ENV) $(MAKE) --no-print-directory test-$(TIER) KUBECONFIG=$(ACK_KUBECONFIG)

@@ -2,6 +2,8 @@
 # ACK tier, stage 1: a throw-away ACK managed cluster for the e2e suite.
 #
 #   VPC ${ACK_VPC_CIDR} (2 vSwitches / 2 zones, NAT gateway + EIP for egress)
+#   │  ACK creates the NAT gateway and its EIP (snat_entry): 200 Mbit/s, pay by
+#   │  traffic. Raising the bandwidth is refused for this account (OrderError).
 #   └─ ACK managed ${ACK_K8S_VERSION} (Flannel, RRSA on, public API endpoint)
 #      │  no CSI add-ons: nothing here needs cloud disks (GreptimeDB gets a hostPath
 #      │  volume), and a disk is one more thing that can outlive the cluster
@@ -9,8 +11,9 @@
 #
 # GPU nodes are not part of this stage: they all come from Karpenter (install.sh),
 # because TensorFusion's expander only clones nodes owned by a Karpenter NodeClaim.
-# The account must have authorized ACK's service roles once (RAM console, or the
-# link in the error CreateCluster returns when one is missing).
+# ACK's account-level service roles (ACK_SERVICE_ROLES) are created first when
+# missing; they are what the console's one-time authorization creates, and they
+# stay in the account.
 # Idempotent; parameters in lib.sh. Everything is tagged Project=${ACK_NAME}.
 
 source "$(dirname "$0")/lib.sh"
@@ -18,6 +21,21 @@ need aliyun kubectl jq
 
 start=$(date +%s)
 tags_kv=(--Tag.1.Key Project --Tag.1.Value "$ACK_NAME" --Tag.2.Key karpenter.sh/discovery --Tag.2.Value "$ACK_NAME")
+
+# --- 0. ACK service roles (account level, kept) -------------------------------------------
+# Without them CreateCluster fails with ErrKubernetesAuditRoleNotAttach / AddonRoleNotAuthorized.
+created=()
+for role in $ACK_SERVICE_ROLES; do
+  aliyun ram GetRole --RoleName "$role" >/dev/null 2>&1 && continue
+  log "creating ACK service role ${role}"
+  aliyun ram CreateRole --RoleName "$role" --Description "ACK service role" \
+    --AssumeRolePolicyDocument '{"Version":"1","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"Service":["cs.aliyuncs.com"]}}]}' >/dev/null
+  aliyun ram AttachPolicyToRole --PolicyType System --PolicyName "${role}Policy" --RoleName "$role" >/dev/null
+  created+=("$role")
+done
+if [ ${#created[@]} -gt 0 ]; then
+  printf '%s created ACK service roles: %s\n' "$(date -u +%FT%TZ)" "${created[*]}" >>"${ACK_HOME}/account-changes.log"
+fi
 
 # --- 1. VPC and vSwitches ------------------------------------------------------------
 vpc=$(ali vpc DescribeVpcs --RegionId "$ACK_REGION" --VpcName "$ACK_NAME" | jq -r '.Vpcs.Vpc[0].VpcId // empty')

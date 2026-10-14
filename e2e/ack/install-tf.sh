@@ -6,6 +6,13 @@
 #   TF_OPERATOR_TAG       operator tag alone, for a development build (default: TF_RELEASE_TAG).
 #                         A tag no registry has must already be in containerd on the system node.
 #   TF_VGPU_PROVIDER_TAG  tensorfusion/vgpu-provider-nvidia tag     (default 1.3.12)
+#   TF_AGENT_IMAGE / TF_AGENT_TAG
+#                         cloud console agent (the controller pod's cluster-agent
+#                         sidecar), default: the chart's. Like TF_OPERATOR_TAG, a
+#                         development tag must already be on the system node
+#                         (ack/.work/images/*.tar). Set development tags here, in
+#                         ack/.work/stack.env, rather than with `kubectl set image`:
+#                         helm and a rebuilt stack keep them.
 #   TF_AGENT_ID / TF_ENROLL_TOKEN / TF_CLOUD_ENDPOINT
 #                         cloud console agent. Read from the environment only and
 #                         stored in a Secret created through stdin; never on a
@@ -28,6 +35,7 @@ need kubectl helm jq
 : "${TF_HYPERVISOR_IMAGE:=tensorfusion/tensor-fusion-hypervisor:${TF_RELEASE_TAG}}"
 : "${TF_VGPU_PROVIDER_TAG:=1.3.12}"
 : "${TF_CHART:=${REPO_ROOT}/charts/tensor-fusion}"
+: "${TF_AGENT_IMAGE:=tensorfusion/tensor-fusion-agent}"
 AGENT_SECRET=tensor-fusion-cloud-agent
 
 # GreptimeDB's claim has no storageClassName and the cluster has no CSI add-on:
@@ -75,6 +83,9 @@ if kubectl -n "$TF_NAMESPACE" get secret "$AGENT_SECRET" >/dev/null 2>&1; then
   [ -n "${TF_CLOUD_ENDPOINT:-}" ] && agent_args+=(--set-string "agent.cloudEndpoint=${TF_CLOUD_ENDPOINT}")
 fi
 
+image_args=()
+[ -n "${TF_AGENT_TAG:-}" ] && image_args=(--set-string "agent.image.repository=${TF_AGENT_IMAGE}" --set-string "agent.image.tag=${TF_AGENT_TAG}")
+
 license_args=()
 if tf_license_load; then
   tf_license_secret default
@@ -84,13 +95,13 @@ else
   log "no worker license (TF_LICENSE / ${TF_LICENSE_FILE}): hard isolation and remote mode will not work"
 fi
 
-log "installing TensorFusion: chart=${TF_CHART} operator=${TF_OPERATOR_IMAGE}:${TF_OPERATOR_TAG} hypervisor=${TF_HYPERVISOR_IMAGE} middleware=vgpu-provider-nvidia:${TF_VGPU_PROVIDER_TAG}"
+log "installing TensorFusion: chart=${TF_CHART} operator=${TF_OPERATOR_IMAGE}:${TF_OPERATOR_TAG} hypervisor=${TF_HYPERVISOR_IMAGE} middleware=vgpu-provider-nvidia:${TF_VGPU_PROVIDER_TAG}${TF_AGENT_TAG:+ agent=${TF_AGENT_IMAGE}:${TF_AGENT_TAG}}"
 start=$(date +%s)
 # karpenterNodeOverlay.requirements: the chart default selects on labels of
 # Karpenter's AWS provider; the Alibaba Cloud provider's own GPU label is used.
 # shellcheck disable=SC2086  # TF_HELM_ARGS is intentionally word-split
 helm upgrade --install "$TF_RELEASE" "$TF_CHART" --namespace "$TF_NAMESPACE" --create-namespace \
-  --wait --timeout 10m ${agent_args[@]+"${agent_args[@]}"} ${license_args[@]+"${license_args[@]}"} ${TF_HELM_ARGS:-} -f - >/dev/null <<YAML
+  --wait --timeout 10m ${agent_args[@]+"${agent_args[@]}"} ${image_args[@]+"${image_args[@]}"} ${license_args[@]+"${license_args[@]}"} ${TF_HELM_ARGS:-} -f - >/dev/null <<YAML
 cluster:
   hypervisorImage: ${TF_HYPERVISOR_IMAGE}
   pool:
