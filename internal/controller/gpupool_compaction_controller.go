@@ -331,6 +331,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	r.pruneMarkedDeletionNodes(ctx, pool, allNodes.Items)
 
 	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
+	r.clearDeletionMarkOnBusyNodes(ctx, allNodes.Items, nodeToWorker)
 	capacity := r.buildCompactionPoolCapacity(ctx, pool, gpuStore)
 
 	toDeleteGPUNodes := []string{}
@@ -350,6 +351,40 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	}
 
 	return r.persistPendingDeletionNodes(ctx, pool, toDeleteGPUNodes)
+}
+
+// clearDeletionMarkOnBusyNodes withdraws the auto-select should-delete mark
+// from nodes that host TF workers again. The scheduler does not honor the
+// mark, so a marked node can be reused; leaving the mark would keep defrag
+// excluding a node that can no longer be reclaimed.
+func (r *GPUPoolCompactionReconciler) clearDeletionMarkOnBusyNodes(
+	ctx context.Context,
+	gpuNodes []tfv1.GPUNode,
+	nodeToWorker map[string]map[types.NamespacedName]struct{},
+) {
+	for i := range gpuNodes {
+		nodeName := gpuNodes[i].Name
+		if len(nodeToWorker[nodeName]) == 0 {
+			continue
+		}
+		node := &corev1.Node{}
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, node); err != nil {
+			continue
+		}
+		if node.Labels[constants.NodeDeletionMark] != constants.TrueStringValue {
+			continue
+		}
+		raw, err := metadataMergePatch(map[string]any{constants.NodeDeletionMark: nil}, nil)
+		if err == nil {
+			err = r.Patch(ctx, node, client.RawPatch(types.MergePatchType, raw))
+		}
+		if err != nil {
+			log.FromContext(ctx).Error(err, "failed to clear deletion mark from busy node", "node", nodeName)
+			continue
+		}
+		delete(r.markDeletionNodes, nodeName)
+		log.FromContext(ctx).Info("cleared deletion mark from node hosting TF workers", "node", nodeName)
+	}
 }
 
 // pruneMarkedDeletionNodes keeps the in-memory compaction guard aligned with
