@@ -3,6 +3,7 @@ package expander
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/awslabs/operatorpkg/status"
+	"github.com/samber/lo"
 	"github.com/samber/lo/mutable"
 	corev1 "k8s.io/api/core/v1"
 	errors "k8s.io/apimachinery/pkg/api/errors"
@@ -485,6 +487,133 @@ const relaxedExpansionCandidate = "<relaxed>"
 type expansionCandidate struct {
 	candidate    string
 	requirements map[string][]string
+	// extra holds the Pod's other required constraints: keys outside the
+	// instance type / zone / region set, and operators other than In. The
+	// NodeClaim is no longer a copy of the template node, so without them
+	// Karpenter can launch a node the Pod does not match.
+	extra []corev1.NodeSelectorRequirement
+}
+
+// extraExpansionRequirements returns the expressions that the candidate
+// requirements do not carry. Keys Karpenter does not accept in NodeClaim
+// requirements, such as kubernetes.io/hostname, are skipped.
+func extraExpansionRequirements(expressions []corev1.NodeSelectorRequirement) []corev1.NodeSelectorRequirement {
+	var extra []corev1.NodeSelectorRequirement
+	for _, expression := range expressions {
+		if expression.Operator == corev1.NodeSelectorOpIn && isExpansionRequirementKey(expression.Key) {
+			continue
+		}
+		if karpv1.IsRestrictedLabel(expression.Key) != nil {
+			continue
+		}
+		extra = append(extra, *expression.DeepCopy())
+	}
+	return extra
+}
+
+// customLabelsFromRequirements resolves a value for each custom label key in
+// the requirements, as Karpenter's resolveCustomLabelsFromRequirements does.
+// Karpenter only does that for NodeClaims it creates itself; the Node of a
+// NodeClaim created here gets the NodeClaim's metadata labels plus what the
+// cloud provider resolves for well-known keys, so a custom requirement such as
+// servicegroup In [ai-gpu] would otherwise never become a Node label.
+func customLabelsFromRequirements(requirements []karpv1.NodeSelectorRequirementWithMinValues) map[string]string {
+	type keyState struct {
+		in, notIn    []string
+		hasIn        bool
+		exists, none bool
+	}
+	states := make(map[string]*keyState)
+	for _, requirement := range requirements {
+		key := requirement.Key
+		if karpv1.WellKnownLabels.Has(key) || karpv1.RestrictedLabels.Has(key) || karpv1.IsRestrictedLabel(key) != nil {
+			continue
+		}
+		state := states[key]
+		if state == nil {
+			state = &keyState{}
+			states[key] = state
+		}
+		switch requirement.Operator {
+		case corev1.NodeSelectorOpIn:
+			if state.hasIn {
+				state.in = lo.Intersect(state.in, requirement.Values)
+			} else {
+				state.in, state.hasIn = append([]string(nil), requirement.Values...), true
+			}
+		case corev1.NodeSelectorOpNotIn:
+			state.notIn = append(state.notIn, requirement.Values...)
+		case corev1.NodeSelectorOpExists:
+			state.exists = true
+		case corev1.NodeSelectorOpDoesNotExist:
+			state.none = true
+		}
+	}
+	labels := make(map[string]string, len(states))
+	for key, state := range states {
+		if state.none {
+			continue
+		}
+		if state.hasIn {
+			values := lo.Without(state.in, state.notIn...)
+			if len(values) > 0 {
+				sort.Strings(values)
+				labels[key] = values[0]
+			}
+			continue
+		}
+		if state.exists {
+			// ponytail: any value satisfies Exists; Karpenter picks a random
+			// number, "true" reads better. A NotIn on the same key is ignored.
+			labels[key] = constants.TrueStringValue
+		}
+	}
+	return labels
+}
+
+func extraRequirementsKey(extra []corev1.NodeSelectorRequirement) string {
+	parts := make([]string, 0, len(extra))
+	for _, expression := range extra {
+		values := append([]string(nil), expression.Values...)
+		sort.Strings(values)
+		parts = append(parts, expression.Key+" "+string(expression.Operator)+" "+strings.Join(values, ","))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
+}
+
+// mergeExtraKarpenterRequirements adds the Pod's extra constraints to the
+// NodeClaim. In expressions are intersected with what is already there and
+// reject the candidate when nothing is left; other operators are appended and
+// Karpenter intersects them.
+func mergeExtraKarpenterRequirements(spec *karpv1.NodeClaimSpec, extra []corev1.NodeSelectorRequirement) bool {
+	in := make(map[string][]string)
+	for _, expression := range extra {
+		if expression.Operator != corev1.NodeSelectorOpIn {
+			continue
+		}
+		merged, compatible := mergeExpansionRequirementValues(in, map[string][]string{expression.Key: expression.Values})
+		if !compatible {
+			return false
+		}
+		in = merged
+	}
+	if !mergeKarpenterRequirements(spec, in) {
+		return false
+	}
+	for _, expression := range extra {
+		if expression.Operator == corev1.NodeSelectorOpIn {
+			continue
+		}
+		requirement := karpv1.NodeSelectorRequirementWithMinValues{NodeSelectorRequirement: expression}
+		if !slices.ContainsFunc(spec.Requirements, func(r karpv1.NodeSelectorRequirementWithMinValues) bool {
+			return r.Key == requirement.Key && r.Operator == requirement.Operator &&
+				slices.Equal(r.Values, requirement.Values) && r.MinValues == nil
+		}) {
+			spec.Requirements = append(spec.Requirements, requirement)
+		}
+	}
+	return true
 }
 
 func preferredExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
@@ -553,18 +682,41 @@ func requiredExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
 		if !compatible {
 			continue
 		}
+		extra := extraExpansionRequirements(term.MatchExpressions)
 		candidate := expansionRequirementsKey(requirements)
+		if extraKey := extraRequirementsKey(extra); extraKey != "" {
+			candidate += "|" + extraKey
+		}
 		if _, exists := seen[candidate]; exists {
 			continue
 		}
 		seen[candidate] = struct{}{}
-		candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements})
+		candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements, extra: extra})
 	}
 	return candidates
 }
 
+// podNodeSelectorExtraRequirements returns the nodeSelector entries that
+// podKarpenterRequirementValues does not carry.
+func podNodeSelectorExtraRequirements(pod *corev1.Pod) []corev1.NodeSelectorRequirement {
+	if pod == nil {
+		return nil
+	}
+	expressions := make([]corev1.NodeSelectorRequirement, 0, len(pod.Spec.NodeSelector))
+	for key, value := range pod.Spec.NodeSelector {
+		if isExpansionRequirementKey(key) {
+			continue
+		}
+		expressions = append(expressions, corev1.NodeSelectorRequirement{
+			Key: key, Operator: corev1.NodeSelectorOpIn, Values: []string{value},
+		})
+	}
+	return extraExpansionRequirements(expressions)
+}
+
 func podExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
 	baseRequirements := podKarpenterRequirementValues(pod)
+	baseExtra := podNodeSelectorExtraRequirements(pod)
 	requiredCandidates := requiredExpansionCandidates(pod)
 	preferredCandidates := preferredExpansionCandidates(pod)
 	candidates := make([]expansionCandidate, 0, len(requiredCandidates)*len(preferredCandidates))
@@ -580,15 +732,19 @@ func podExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
 			if !compatible {
 				continue
 			}
+			extra := append(append([]corev1.NodeSelectorRequirement(nil), baseExtra...), required.extra...)
 			candidate := expansionRequirementsKey(requirements)
 			if candidate == "" {
 				candidate = relaxedExpansionCandidate
+			}
+			if extraKey := extraRequirementsKey(extra); extraKey != "" {
+				candidate += "|" + extraKey
 			}
 			if _, exists := seen[candidate]; exists {
 				continue
 			}
 			seen[candidate] = struct{}{}
-			candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements})
+			candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements, extra: extra})
 		}
 	}
 	return candidates
@@ -1210,7 +1366,8 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 	candidateFound := false
 	for _, candidate := range e.expansionCandidatesToTry(pod) {
 		candidateSpec := (&karpv1.NodeClaim{Spec: spec}).DeepCopy().Spec
-		if !mergeKarpenterRequirements(&candidateSpec, candidate.requirements) {
+		if !mergeKarpenterRequirements(&candidateSpec, candidate.requirements) ||
+			!mergeExtraKarpenterRequirements(&candidateSpec, candidate.extra) {
 			continue
 		}
 		spec = candidateSpec
@@ -1222,6 +1379,11 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidatesExhausted", "Exhausted",
 			"all Karpenter expansion requirement candidates have failed")
 		return fmt.Errorf("all Karpenter expansion requirement candidates have failed for pod %s/%s", pod.Namespace, pod.Name)
+	}
+	for key, value := range customLabelsFromRequirements(spec.Requirements) {
+		if _, exists := labels[key]; !exists {
+			labels[key] = value
+		}
 	}
 
 	// Create NodeClaim from the prepared node

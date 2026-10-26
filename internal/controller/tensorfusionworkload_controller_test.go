@@ -19,6 +19,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -373,16 +374,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 	Context("When the workload names no pool", func() {
 		It("Should run it in the default pool and store the pool name", func() {
-			pool := tfEnv.GetGPUPool(0)
-			Eventually(func(g Gomega) {
-				latest := &tfv1.GPUPool{}
-				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pool), latest)).Should(Succeed())
-				if latest.Annotations == nil {
-					latest.Annotations = map[string]string{}
-				}
-				latest.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] = constants.TrueStringValue
-				g.Expect(k8sClient.Update(ctx, latest)).Should(Succeed())
-			}).Should(Succeed())
+			pool := setDefaultPool(tfEnv, 0, true)
 
 			workload := createTensorFusionWorkload("", key, 1)
 			Eventually(func(g Gomega) {
@@ -393,13 +385,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		})
 
 		It("Should not create worker pods when no pool is the default", func() {
-			pool := tfEnv.GetGPUPool(0)
-			Eventually(func(g Gomega) {
-				latest := &tfv1.GPUPool{}
-				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pool), latest)).Should(Succeed())
-				delete(latest.Annotations, constants.TensorFusionDefaultPoolKeyAnnotation)
-				g.Expect(k8sClient.Update(ctx, latest)).Should(Succeed())
-			}).Should(Succeed())
+			setDefaultPool(tfEnv, 0, false)
 
 			workload := createTensorFusionWorkload("", key, 1)
 			podList := &corev1.PodList{}
@@ -581,6 +567,22 @@ func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
 			}
 		}
 	}).Should(Succeed())
+}
+
+// setDefaultPool marks the pool as the default one where that is declared, on
+// the TensorFusionCluster: the cluster controller rewrites the GPUPool's
+// default-pool annotation from it on every reconcile.
+func setDefaultPool(tfEnv *TensorFusionEnv, poolIndex int, isDefault bool) *tfv1.GPUPool {
+	GinkgoHelper()
+	tfc := tfEnv.GetCluster()
+	tfc.Spec.GPUPools[poolIndex].IsDefault = isDefault
+	tfEnv.UpdateCluster(tfc)
+	pool := &tfv1.GPUPool{}
+	Eventually(func(g Gomega) {
+		g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: tfEnv.getPoolName(poolIndex)}, pool)).Should(Succeed())
+		g.Expect(pool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation]).Should(Equal(strconv.FormatBool(isDefault)))
+	}).Should(Succeed())
+	return pool
 }
 
 func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas int) *tfv1.TensorFusionWorkload {
