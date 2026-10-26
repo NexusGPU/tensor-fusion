@@ -465,3 +465,91 @@ func TestNodeScalerInfoExposesExpansionState(t *testing.T) {
 	failed := info["failedExpansionCandidates"].(map[string][]string)
 	require.Equal(t, []string{"candidate-a"}, failed[expansionPodKey("default", "worker", "worker-uid")])
 }
+
+// The NodeClaim is built from the NodePool, not copied from the template node,
+// so every required constraint of the Pod has to reach it. Instance type, zone
+// and region In expressions still drive the candidates; everything else rides
+// along with the term it belongs to.
+func TestExpansionCandidatesCarryOtherRequiredConstraints(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		NodeSelector: map[string]string{
+			"team":                   "ai",
+			corev1.LabelHostname:     "template-node",
+			corev1.LabelTopologyZone: "us-east-1a",
+		},
+		Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+				{MatchExpressions: []corev1.NodeSelectorRequirement{
+					{Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"p4d.24xlarge"}},
+					{Key: "servicegroup", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai-gpu"}},
+					{Key: "karpenter.sh/capacity-type", Operator: corev1.NodeSelectorOpIn, Values: []string{"on-demand"}},
+					{Key: "inference-model-group", Operator: corev1.NodeSelectorOpDoesNotExist},
+				}},
+				{MatchExpressions: []corev1.NodeSelectorRequirement{
+					{Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"p4d.24xlarge"}},
+					{Key: "servicegroup", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai-gpu-backup"}},
+				}},
+			}},
+		}},
+	}}
+
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 2, "terms that differ only outside the whitelist stay separate candidates")
+	require.Equal(t, []string{"p4d.24xlarge"}, candidates[0].requirements[corev1.LabelInstanceTypeStable])
+	require.Equal(t, []string{"us-east-1a"}, candidates[0].requirements[corev1.LabelTopologyZone])
+	require.ElementsMatch(t, []corev1.NodeSelectorRequirement{
+		{Key: "team", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai"}},
+		{Key: "servicegroup", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai-gpu"}},
+		{Key: "karpenter.sh/capacity-type", Operator: corev1.NodeSelectorOpIn, Values: []string{"on-demand"}},
+		{Key: "inference-model-group", Operator: corev1.NodeSelectorOpDoesNotExist},
+	}, candidates[0].extra, "hostname is restricted in NodeClaims and is dropped")
+	require.ElementsMatch(t, []corev1.NodeSelectorRequirement{
+		{Key: "team", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai"}},
+		{Key: "servicegroup", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai-gpu-backup"}},
+	}, candidates[1].extra)
+}
+
+func TestMergeExtraKarpenterRequirements(t *testing.T) {
+	pool := func() *karpv1.NodeClaimSpec {
+		return &karpv1.NodeClaimSpec{Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+			testKarpenterRequirement("karpenter.sh/capacity-type", corev1.NodeSelectorOpIn, []string{"on-demand", "spot"}),
+		}}
+	}
+
+	spec := pool()
+	require.True(t, mergeExtraKarpenterRequirements(spec, []corev1.NodeSelectorRequirement{
+		{Key: "karpenter.sh/capacity-type", Operator: corev1.NodeSelectorOpIn, Values: []string{"on-demand"}},
+		{Key: "servicegroup", Operator: corev1.NodeSelectorOpIn, Values: []string{"ai-gpu"}},
+		{Key: "inference-model-group", Operator: corev1.NodeSelectorOpDoesNotExist},
+	}))
+	values := requirementValuesByKey(spec.Requirements)
+	require.Equal(t, []string{"on-demand"}, values["karpenter.sh/capacity-type"], "narrowed, not widened")
+	require.Equal(t, []string{"ai-gpu"}, values["servicegroup"])
+	require.Contains(t, spec.Requirements,
+		testKarpenterRequirement("inference-model-group", corev1.NodeSelectorOpDoesNotExist, nil))
+
+	require.False(t, mergeExtraKarpenterRequirements(pool(), []corev1.NodeSelectorRequirement{
+		{Key: "karpenter.sh/capacity-type", Operator: corev1.NodeSelectorOpIn, Values: []string{"reserved"}},
+	}), "a Pod constraint the NodePool cannot satisfy rejects the candidate")
+}
+
+// Karpenter copies only NodeClaim metadata labels (plus provider-resolved
+// well-known labels) to the Node, so custom requirements must be resolved into
+// labels or the Pod's affinity on them never matches the new node.
+func TestCustomLabelsFromRequirements(t *testing.T) {
+	labels := customLabelsFromRequirements([]karpv1.NodeSelectorRequirementWithMinValues{
+		testKarpenterRequirement("servicegroup", corev1.NodeSelectorOpIn, []string{"ai-gpu"}),
+		testKarpenterRequirement("tier", corev1.NodeSelectorOpIn, []string{"b", "a", "c"}),
+		testKarpenterRequirement("tier", corev1.NodeSelectorOpNotIn, []string{"a"}),
+		testKarpenterRequirement("gpu-ready", corev1.NodeSelectorOpExists, nil),
+		testKarpenterRequirement("inference-model-group", corev1.NodeSelectorOpDoesNotExist, nil),
+		testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, []string{"p4d.24xlarge"}),
+		testKarpenterRequirement("karpenter.sh/capacity-type", corev1.NodeSelectorOpIn, []string{"on-demand"}),
+		testKarpenterRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, []string{"amd64"}),
+	})
+	require.Equal(t, map[string]string{
+		"servicegroup": "ai-gpu",
+		"tier":         "b",
+		"gpu-ready":    "true",
+	}, labels, "well-known keys are left to the cloud provider, DoesNotExist gets no label")
+}
