@@ -5,7 +5,7 @@ ARG VGPU_PROVIDER_IMAGE=tensorfusion/vgpu-provider-nvidia:latest
 FROM ${VGPU_PROVIDER_IMAGE} AS provider
 
 # Stage 2: final hypervisor image
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 ARG TARGETARCH
 
 WORKDIR /
