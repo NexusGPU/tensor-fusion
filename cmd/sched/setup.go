@@ -157,6 +157,9 @@ func SetupScheduler(
 	); err != nil {
 		return nil, nil, nil, err
 	}
+	if err := checkGPUFitExtensionPoints(klog.FromContext(ctx), sched.Profiles, schedulerConfigPath); err != nil {
+		return nil, nil, nil, err
+	}
 
 	// Initialize node expander
 	if enableNodeExpander {
