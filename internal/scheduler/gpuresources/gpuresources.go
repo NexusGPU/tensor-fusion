@@ -15,6 +15,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gang"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
@@ -1466,6 +1467,19 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 		return fwk.QueueSkip, nil
 	}
 
+	// A shared pod requests no TFLOPs or VRAM: it takes whole GPUs, so it can
+	// run once a GPU is completely idle again. Comparing the increase with its
+	// zero request would never requeue it, and it would wait for the periodic
+	// flush of the unschedulable queue.
+	if allocRequest.Isolation == tfv1.IsolationModeShared {
+		idle, _ := filter.NewSharedWholeGPUFilter().Filter(s.ctx, allocRequest.WorkloadNameNamespace, []*tfv1.GPU{newGPU})
+		if len(idle) == 0 {
+			return fwk.QueueSkip, nil
+		}
+		logger.V(4).Info("GPU became idle, requeue unscheduled shared pod", "pod", klog.KObj(pod), "gpu", newGPU.Name)
+		return fwk.Queue, nil
+	}
+
 	// Calculate total request for this pod (multiply by count for multi-GPU)
 	// Handle both TFLOPs and ComputePercent (use GPU capacity to convert percent to absolute value)
 	var gpuCapacity resource.Quantity
@@ -1474,9 +1488,13 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	}
 	actualTflops := utils.GetActualTflops(gpuCapacity, allocRequest.Request)
 	if actualTflops == nil {
-		// Cannot determine TFLOPs requirement (e.g., ComputePercent used but GPU capacity unavailable)
-		logger.V(5).Info("Cannot determine pod TFLOPs requirement, skip", "pod", klog.KObj(pod))
-		return fwk.QueueSkip, nil
+		if !allocRequest.Request.ComputePercent.IsZero() {
+			// ComputePercent cannot be converted without the GPU's capacity.
+			logger.V(5).Info("Cannot determine pod TFLOPs requirement, skip", "pod", klog.KObj(pod))
+			return fwk.QueueSkip, nil
+		}
+		// No compute request (a VRAM-only pod): only VRAM decides.
+		actualTflops = &resource.Quantity{}
 	}
 	// Compare per-GPU request against this single GPU's resource increase.
 	// The queueing hint fires once per GPU CR update, so we only need to check

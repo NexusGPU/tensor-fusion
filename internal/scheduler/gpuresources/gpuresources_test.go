@@ -872,6 +872,66 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(hint).To(Equal(fwk.Queue))
 		})
+
+		// A shared pod requests no TFLOPs or VRAM, so the request comparison
+		// never fired for it and it waited for the 5-minute unschedulable flush.
+		sharedPod := func() *v1.Pod {
+			pod := makePod("shared-pod-hint", map[string]string{
+				constants.IsolationModeAnnotation: string(tfv1.IsolationModeShared),
+				constants.GpuCountAnnotation:      "2",
+				constants.GpuPoolKey:              "pool-a",
+			})
+			pod.Spec.NodeName = ""
+			return pod
+		}
+		gpuWithAvailable := func(tflops, vram string) *tfv1.GPU {
+			return &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-shared"},
+				Status: tfv1.GPUStatus{
+					Capacity:  &tfv1.Resource{Tflops: resource.MustParse("71"), Vram: resource.MustParse("24Gi")},
+					Available: &tfv1.Resource{Tflops: resource.MustParse(tflops), Vram: resource.MustParse(vram)},
+				},
+			}
+		}
+
+		It("should queue a shared pod when a GPU becomes idle", func() {
+			hint, err := plugin.queueingHint(*plugin.logger, sharedPod(), gpuWithAvailable("0", "0"), gpuWithAvailable("71", "24Gi"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hint).To(Equal(fwk.Queue))
+		})
+
+		It("should skip a shared pod while the GPU is still partly used", func() {
+			hint, err := plugin.queueingHint(*plugin.logger, sharedPod(), gpuWithAvailable("0", "0"), gpuWithAvailable("50", "20Gi"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hint).To(Equal(fwk.QueueSkip))
+		})
+
+		It("should queue a VRAM-only pod when enough VRAM is freed", func() {
+			vramOnly := makePod("vram-only-pod-hint", map[string]string{
+				constants.VRAMRequestAnnotation: "8Gi",
+				constants.GpuCountAnnotation:    "1",
+				constants.GpuPoolKey:            "pool-a",
+			})
+			vramOnly.Spec.NodeName = ""
+			hint, err := plugin.queueingHint(*plugin.logger, vramOnly, gpuWithAvailable("10", "4Gi"), gpuWithAvailable("20", "16Gi"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hint).To(Equal(fwk.Queue))
+		})
+
+		It("should skip a compute-percent pod when the GPU capacity is unknown", func() {
+			percentPod := makePod("percent-pod-hint", map[string]string{
+				constants.ComputeRequestAnnotation: "50",
+				constants.VRAMRequestAnnotation:    "1Gi",
+				constants.GpuCountAnnotation:       "1",
+				constants.GpuPoolKey:               "pool-a",
+			})
+			percentPod.Spec.NodeName = ""
+			oldGPU := &tfv1.GPU{Status: tfv1.GPUStatus{Available: &tfv1.Resource{Tflops: resource.MustParse("10"), Vram: resource.MustParse("1Gi")}}}
+			newGPU := &tfv1.GPU{Status: tfv1.GPUStatus{Available: &tfv1.Resource{Tflops: resource.MustParse("60"), Vram: resource.MustParse("10Gi")}}}
+			hint, err := plugin.queueingHint(*plugin.logger, percentPod, oldGPU, newGPU)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hint).To(Equal(fwk.QueueSkip))
+		})
 	})
 
 	Describe("ReconcileAllocationState", func() {
