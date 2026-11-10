@@ -18,11 +18,11 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	podresourcesv1 "k8s.io/kubelet/pkg/apis/podresources/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -310,7 +310,7 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	allocated, registeredDeviceIDs := d.extractDeviceIDs(checkpoint)
 	if d.grpcEndpointAvailable() {
 		// Use kubelet pod-resources gRPC API as SSoT if available, otherwise fallback to checkpoint
-		allocatedDevices, err := d.getAllocatedDevices()
+		allocatedDevices, err := d.getAllocatedDevices(defaultKubeletPodResourcesSocket)
 		if err != nil {
 			klog.Errorf("Failed to get allocated devices from gRPC: %v", err)
 		} else {
@@ -552,8 +552,8 @@ func (d *DevicePluginDetector) grpcEndpointAvailable() bool {
 
 // getAllocatedDevices queries the kubelet pod-resources gRPC API to get allocated device IDs
 // Returns a map of lowercase device IDs that are currently allocated to pods
-func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) {
-	conn, err := d.dialPodResourcesSocket(defaultKubeletPodResourcesSocket, 5*time.Second)
+func (d *DevicePluginDetector) getAllocatedDevices(socketPath string) (map[string]string, error) {
+	conn, err := d.dialPodResourcesSocket(socketPath, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to pod-resources socket: %w", err)
 	}
@@ -562,23 +562,21 @@ func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) 
 			klog.Errorf("failed to close pod-resources socket: %v", err)
 		}
 	}()
-	// Note: pod-resources API types are not exported from k8s.io/kubernetes and not in vendor.
-	// Using gRPC Invoke directly with minimal types matching the API structure.
 	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Second)
 	defer cancel()
 
-	var resp podResourcesResponse
-	if err := conn.Invoke(ctx, "/v1.PodResourcesLister/List", &emptypb.Empty{}, &resp); err != nil {
+	resp, err := podresourcesv1.NewPodResourcesListerClient(conn).List(ctx, &podresourcesv1.ListPodResourcesRequest{})
+	if err != nil {
 		return nil, fmt.Errorf("failed to list pod resources: %w", err)
 	}
 
 	allocatedDevices := make(map[string]string)
 
-	for _, podResource := range resp.PodResources {
-		for _, container := range podResource.Containers {
-			for _, device := range container.Devices {
-				for _, deviceID := range device.DeviceIds {
-					allocatedDevices[normalizeDeviceID(strings.ToLower(deviceID))] = device.ResourceName
+	for _, podResource := range resp.GetPodResources() {
+		for _, container := range podResource.GetContainers() {
+			for _, device := range container.GetDevices() {
+				for _, deviceID := range device.GetDeviceIds() {
+					allocatedDevices[normalizeDeviceID(strings.ToLower(deviceID))] = device.GetResourceName()
 				}
 			}
 		}
@@ -587,45 +585,6 @@ func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) 
 	klog.V(4).Infof("Retrieved %d allocated devices from pod-resources API", len(allocatedDevices))
 	return allocatedDevices, nil
 }
-
-// podResourcesResponse matches the pod-resources API response structure
-// These types are manually defined because k8s.io/kubernetes/pkg/kubelet/apis/podresources/v1
-// is not exported and not available in vendor directory
-type podResourcesResponse struct {
-	PodResources []*podResource `json:"pod_resources"`
-}
-
-func (m *podResourcesResponse) Reset()         { *m = podResourcesResponse{} }
-func (m *podResourcesResponse) String() string { return "podResourcesResponse" }
-func (*podResourcesResponse) ProtoMessage()    {}
-
-type podResource struct {
-	Name       string       `json:"name"`
-	Namespace  string       `json:"namespace"`
-	Containers []*container `json:"containers"`
-}
-
-func (m *podResource) Reset()         { *m = podResource{} }
-func (m *podResource) String() string { return "podResource" }
-func (*podResource) ProtoMessage()    {}
-
-type container struct {
-	Name    string    `json:"name"`
-	Devices []*device `json:"devices"`
-}
-
-func (m *container) Reset()         { *m = container{} }
-func (m *container) String() string { return "container" }
-func (*container) ProtoMessage()    {}
-
-type device struct {
-	ResourceName string   `json:"resource_name"`
-	DeviceIds    []string `json:"device_ids"`
-}
-
-func (m *device) Reset()         { *m = device{} }
-func (m *device) String() string { return "device" }
-func (*device) ProtoMessage()    {}
 
 // dialPodResourcesSocket establishes a gRPC connection to the kubelet pod-resources socket
 func (d *DevicePluginDetector) dialPodResourcesSocket(
