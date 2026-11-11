@@ -805,7 +805,15 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 			gpuCopy.Status.NodeSelector = make(map[string]string, 1)
 		}
 		gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel] = newPreparedNode.Name
+		// The copy stands for a GPU of a node that does not exist yet: it is
+		// idle, healthy and not taken by a native device plugin, whatever the
+		// template GPU is. Copying the template's usedBy or phase made
+		// PhaseFilter reject every copy of a node whose GPUs native Pods hold,
+		// so expansion found no node that could fit.
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
+		gpuCopy.Status.UsedBy = tfv1.UsedByTensorFusion
+		gpuCopy.Status.Phase = tfv1.TensorFusionGPUPhaseRunning
+		gpuCopy.Status.RunningApps = nil
 		newPreparedGPUs = append(newPreparedGPUs, gpuCopy)
 	}
 	return newPreparedNode, newPreparedGPUs
