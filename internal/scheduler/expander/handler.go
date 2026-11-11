@@ -971,7 +971,16 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 	for _, gpu := range templateGPUs {
 		gpuCopy := gpu.DeepCopy()
 		gpuCopy.Name = "gpu-" + rand.String(12)
+		// The copy stands for a GPU of a node that does not exist yet: it is
+		// idle, healthy and not taken by a native device plugin, whatever the
+		// template GPU is. Copying the template's usedBy, phase or partitions
+		// made PhaseFilter or SharedWholeGPUFilter reject every copy of a node
+		// whose GPUs native Pods hold, so expansion found no node that could fit.
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
+		gpuCopy.Status.UsedBy = tfv1.UsedByTensorFusion
+		gpuCopy.Status.Phase = tfv1.TensorFusionGPUPhaseRunning
+		gpuCopy.Status.RunningApps = nil
+		gpuCopy.Status.AllocatedPartitions = nil
 		gpuCopy.Status.IsolationPolicy = e.allocator.IsolationPolicy()
 		gpuCopy.Status.ActiveIsolationMode = ""
 		gpuCopy.Status.DynamicIsolationConflict = false
