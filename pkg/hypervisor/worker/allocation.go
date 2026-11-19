@@ -120,6 +120,37 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 		}
 	}
 
+	envs, deviceSpecs := DeviceExposure(deviceInfos, isPartitioned)
+	if request.IsolationMode == tfv1.IsolationModeHard && len(deviceInfos) > 0 {
+		// Hard isolation consumes a percentage, while users may request either
+		// ComputePercent or absolute TFLOPS. computeUpLimit prefers the
+		// percentage the scheduler recorded from the selected GPU's capacity and
+		// otherwise (older schedulers) applies the same conversion to the same
+		// capacity, held by the device.
+		percent := computeUpLimit(request, deviceInfos[0])
+		envs[constants.HardSMLimiterEnv] = strconv.FormatUint(uint64(percent), 10)
+	}
+
+	allocation := &api.WorkerAllocation{
+		WorkerInfo:  request,
+		DeviceInfos: deviceInfos,
+		Envs:        envs,
+		Mounts:      mounts,
+		Devices:     deviceSpecs,
+	}
+
+	a.workerAllocations[request.WorkerUID] = allocation
+	for _, deviceUUID := range request.AllocatedDevices {
+		a.addDeviceAllocation(deviceUUID, allocation)
+	}
+	return allocation, nil
+}
+
+// DeviceExposure returns the environment variables and device nodes that
+// expose deviceInfos, and only them, to a container. The device plugin also
+// calls it with the subset of a worker's devices that belongs to one
+// container of a multi-container Pod.
+func DeviceExposure(deviceInfos []*api.DeviceInfo, isPartitioned bool) (map[string]string, []*api.DeviceSpec) {
 	envs := make(map[string]string, 8)
 	devices := make(map[string]*api.DeviceSpec, 8)
 	for _, deviceInfo := range deviceInfos {
@@ -174,29 +205,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			}
 		}
 	}
-	if request.IsolationMode == tfv1.IsolationModeHard && len(deviceInfos) > 0 {
-		// Hard isolation consumes a percentage, while users may request either
-		// ComputePercent or absolute TFLOPS. computeUpLimit prefers the
-		// percentage the scheduler recorded from the selected GPU's capacity and
-		// otherwise (older schedulers) applies the same conversion to the same
-		// capacity, held by the device.
-		percent := computeUpLimit(request, deviceInfos[0])
-		envs[constants.HardSMLimiterEnv] = strconv.FormatUint(uint64(percent), 10)
-	}
-
-	allocation := &api.WorkerAllocation{
-		WorkerInfo:  request,
-		DeviceInfos: deviceInfos,
-		Envs:        envs,
-		Mounts:      mounts,
-		Devices:     lo.Values(devices),
-	}
-
-	a.workerAllocations[request.WorkerUID] = allocation
-	for _, deviceUUID := range request.AllocatedDevices {
-		a.addDeviceAllocation(deviceUUID, allocation)
-	}
-	return allocation, nil
+	return envs, lo.Values(devices)
 }
 
 // rollbackSplits releases partitions that were created during a failed
