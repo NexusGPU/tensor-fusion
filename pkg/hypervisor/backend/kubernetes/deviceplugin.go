@@ -55,6 +55,8 @@ type DevicePlugin struct {
 	deviceController framework.DeviceController
 	allocateWorker   func(context.Context, *api.WorkerInfo) (*api.WorkerAllocation, error)
 	kubeletClient    *PodCacheManager
+	// allocatedContainerDevices replaces the kubelet pod-resources query in tests.
+	allocatedContainerDevices func(ctx context.Context, namespace, name string) (map[string][]string, error)
 
 	server            *grpc.Server
 	socketPath        string
@@ -330,15 +332,21 @@ func (dp *DevicePlugin) Allocate(
 			)
 		}
 
+		envs, devices, err := dp.containerExposure(ctx, allocResp, containerReq.DevicesIds)
+		if err != nil {
+			klog.Errorf("Failed to resolve devices of a container of worker %s: %v", workerInfo.WorkerUID, err)
+			return nil, err
+		}
+
 		containerResp := &pluginapi.ContainerAllocateResponse{
-			Envs: allocResp.Envs,
+			Envs: envs,
 			Mounts: lo.Map(allocResp.Mounts, func(mount *api.Mount, _ int) *pluginapi.Mount {
 				return &pluginapi.Mount{
 					ContainerPath: mount.GuestPath,
 					HostPath:      mount.HostPath,
 				}
 			}),
-			Devices: lo.Map(allocResp.Devices, func(device *api.DeviceSpec, _ int) *pluginapi.DeviceSpec {
+			Devices: lo.Map(devices, func(device *api.DeviceSpec, _ int) *pluginapi.DeviceSpec {
 				return &pluginapi.DeviceSpec{
 					ContainerPath: device.GuestPath,
 					HostPath:      device.HostPath,
