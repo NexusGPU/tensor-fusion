@@ -138,7 +138,7 @@ The values keys for each component:
 | --- | --- | --- |
 | operator | `controller.image.repository` + `controller.image.tag` | Repository and tag are two separate keys |
 | hypervisor | `cluster.hypervisorImage` | **Full image** (repository + tag); when empty, `tensorfusion/tensor-fusion-hypervisor:<appVersion>` is used, the same version as the operator |
-| vgpu-provider | `providerConfigs.nvidia.images.middleware` | Default `tensorfusion/vgpu-provider-nvidia:1.3.9` |
+| vgpu-provider | `providerConfigs.nvidia.images.middleware` | Default `tensorfusion/vgpu-provider-nvidia:1.3.15` |
 | client | `providerConfigs.nvidia.images.remoteClient` | Default `tensorfusion/tensor-fusion-client:v2.25.0` |
 | worker | `providerConfigs.nvidia.images.remoteWorker` | Default `tensorfusion/tensor-fusion-worker:v2.25.0` |
 
