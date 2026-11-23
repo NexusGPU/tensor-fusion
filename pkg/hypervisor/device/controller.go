@@ -42,6 +42,10 @@ type Controller struct {
 
 	// allocationController is set after creation to provide allocation data for telemetry
 	allocationController framework.WorkerAllocationController
+
+	// unreadable follows the devices the metrics queries cannot read, see
+	// unreadable_devices.go.
+	unreadable unreadableDevices
 }
 
 var _ framework.DeviceController = &Controller{}
@@ -69,6 +73,7 @@ func NewController(
 		deviceUpdateHandlers: make([]framework.DeviceChangeHandler, 2),
 		isolationMode:        api.IsolationMode(isolationMode),
 		isolationPolicy:      tfv1.IsolationModePolicyStatic,
+		unreadable:           unreadableDevices{grace: defaultUnreadableGrace},
 	}
 
 	return ctrl, nil
@@ -331,6 +336,7 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 	result := make(map[string]*api.GPUUsageMetrics, len(m.devices))
 	metrics, err := m.accelerator.GetDeviceMetrics(nativeUUIDs)
 	if err != nil {
+		m.rediscoverUnreadableLocked(result)
 		return nil, fmt.Errorf("failed to get device metrics: %w", err)
 	}
 	for _, metric := range metrics {
@@ -350,7 +356,36 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 		}
 		result[deviceUUID] = metric
 	}
+	m.rediscoverUnreadableLocked(result)
 	return result, nil
+}
+
+// rediscoverUnreadableLocked discovers the devices again when a physical
+// device has had no metrics sample for the grace period: the provider leaves
+// out a device that no longer answers, and the handlers of the discovery take
+// it out of scheduling. Caller holds m.mu; the discovery runs on its own.
+func (m *Controller) rediscoverUnreadableLocked(read map[string]*api.GPUUsageMetrics) {
+	known := make([]string, 0, len(m.devices))
+	for uuid, device := range m.devices {
+		// A partition is read through its parent device.
+		if device != nil && device.ParentUUID == "" {
+			known = append(known, uuid)
+		}
+	}
+	overdue := m.unreadable.observe(time.Now(), known, func(uuid string) bool {
+		_, ok := read[uuid]
+		return ok
+	})
+	if len(overdue) == 0 {
+		return
+	}
+	klog.Warningf("No metrics could be read from devices %v for %s, discovering devices again",
+		overdue, m.unreadable.grace)
+	go func() {
+		if err := m.discoverDevices(); err != nil {
+			klog.Errorf("Device discovery after unreadable devices %v failed: %v", overdue, err)
+		}
+	}()
 }
 
 // GetProcessInformation implements framework.DeviceController
