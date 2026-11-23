@@ -1426,7 +1426,7 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 		}
 	}
 
-	if hint, handled := s.phaseRunningWakeupHint(logger, pod, oldGPU, newGPU); handled {
+	if hint, handled := s.gpuUsableWakeupHint(logger, pod, oldGPU, newGPU); handled {
 		if hint == fwk.Queue {
 			s.wakeAfterAllocatorSync(pod, newGPU)
 		}
@@ -1514,13 +1514,14 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	return fwk.QueueSkip, nil
 }
 
-// phaseRunningWakeupHint handles the rare, strong wake-up signal of a GPU CR
-// transitioning into the Running phase (e.g. after hypervisor recovery).
-// Available resources may be unchanged across this transition, so the
-// available-increase path in queueingHint would otherwise miss it and leave
-// the pod stuck until the 5-minute unschedulable queue flush. We accept the
-// false-positive cost of one wasted scheduling cycle in exchange for a
-// guaranteed wake-up.
+// gpuUsableWakeupHint handles the rare, strong wake-up signal of a GPU
+// becoming usable by TensorFusion: it enters the Running phase (e.g. after
+// hypervisor recovery), or an external device plugin that had it allocated
+// hands it back (status.usedBy returns to tensor-fusion). Available resources
+// may be unchanged across either transition, so the available-increase path
+// in queueingHint would otherwise miss it and leave the pod stuck until the
+// 5-minute unschedulable queue flush. We accept the false-positive cost of one
+// wasted scheduling cycle in exchange for a guaranteed wake-up.
 //
 // Race-free pre-check: only wake pods in the same pool as the GPU. An empty
 // podPool would fail in ComposeAllocationRequest anyway; an empty gpuPool
@@ -1530,15 +1531,12 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 //
 // Returns (hint, handled). When handled is false the caller should continue
 // with the resource-increase path.
-func (s *GPUFit) phaseRunningWakeupHint(
+func (s *GPUFit) gpuUsableWakeupHint(
 	logger klog.Logger,
 	pod *v1.Pod,
 	oldGPU, newGPU *tfv1.GPU,
 ) (fwk.QueueingHint, bool) {
-	if newGPU == nil || newGPU.Status.Phase != tfv1.TensorFusionGPUPhaseRunning {
-		return fwk.QueueSkip, false
-	}
-	if oldGPU != nil && oldGPU.Status.Phase == tfv1.TensorFusionGPUPhaseRunning {
+	if !gpuUsableByTensorFusion(newGPU) || gpuUsableByTensorFusion(oldGPU) {
 		return fwk.QueueSkip, false
 	}
 
@@ -1551,19 +1549,27 @@ func (s *GPUFit) phaseRunningWakeupHint(
 		gpuPool = newGPU.Labels[constants.GpuPoolKey]
 	}
 	if podPool == "" || gpuPool == "" || podPool != gpuPool {
-		logger.V(4).Info("GPU phase->Running but pool does not match, skip",
+		logger.V(4).Info("GPU became usable but pool does not match, skip",
 			"pod", klog.KObj(pod), "gpu", newGPU.Name,
 			"podPool", podPool, "gpuPool", gpuPool)
 		return fwk.QueueSkip, true
 	}
-	oldPhase := tfv1.TensorFusionGPUPhase("")
+	oldPhase, oldUsedBy := tfv1.TensorFusionGPUPhase(""), tfv1.UsedBySystem("")
 	if oldGPU != nil {
-		oldPhase = oldGPU.Status.Phase
+		oldPhase, oldUsedBy = oldGPU.Status.Phase, oldGPU.Status.UsedBy
 	}
-	logger.Info("GPU transitioned into Running phase, requeue unscheduled pod",
-		"pod", klog.KObj(pod), "gpu", newGPU.Name, "oldPhase", oldPhase,
+	logger.Info("GPU became usable, requeue unscheduled pod",
+		"pod", klog.KObj(pod), "gpu", newGPU.Name, "oldPhase", oldPhase, "oldUsedBy", oldUsedBy,
 		"pool", gpuPool)
 	return fwk.Queue, true
+}
+
+// gpuUsableByTensorFusion is what the allocator's phase filter requires of a
+// GPU before anything else: Running, and not allocated by an external device
+// plugin.
+func gpuUsableByTensorFusion(gpu *tfv1.GPU) bool {
+	return gpu != nil && gpu.Status.Phase == tfv1.TensorFusionGPUPhaseRunning &&
+		(gpu.Status.UsedBy == "" || gpu.Status.UsedBy == tfv1.UsedByTensorFusion)
 }
 
 // allocateGPUsToContainers allocates GPUs to containers based on their requirements

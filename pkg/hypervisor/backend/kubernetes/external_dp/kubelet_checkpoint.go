@@ -18,6 +18,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
@@ -238,8 +239,10 @@ func (d *DevicePluginDetector) run() {
 	patchAllTicker := time.NewTicker(patchAllInterval)
 	defer patchAllTicker.Stop()
 
-	// Process initial state
-	if err := d.processDeviceState(false); err != nil {
+	// Nothing is remembered across a restart, so there is no previous state to
+	// compare with: reconcile every device, which also returns the ones that
+	// were released while this process was not running.
+	if err := d.processDeviceState(true); err != nil {
 		klog.Errorf("Failed to process initial device state: %v", err)
 	}
 
@@ -325,11 +328,13 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	var addedDevices, removedDevices map[string]string
 
 	if patchAllDevices {
-		// Patch all devices: treat all allocated as added, and all registered but not allocated as removed
+		// Patch all devices: treat all allocated as added, and all registered but not allocated as removed.
+		// This is the only path that returns a device released while nobody was watching, so the
+		// resource name has to come from the registration: an unallocated device has no other.
 		addedDevices = allocated
 		removedDevices = make(map[string]string)
-		for deviceID := range registeredDeviceIDs {
-			if resName, exists := allocated[deviceID]; !exists {
+		for deviceID, resName := range registeredDeviceIDs {
+			if _, exists := allocated[deviceID]; !exists {
 				removedDevices[deviceID] = resName
 			}
 		}
@@ -351,50 +356,45 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 		}
 	}
 
-	// Process added devices using vendor-specific detectors
-	hasError := false
+	// Several device IDs can stand for one GPU (HAMI registers GPU-<uuid>-<n>),
+	// so work per GPU: it is marked when any of its devices is allocated, and
+	// returned only when none of them is.
+	inUse := make(map[string]struct{}, len(allocated))
+	for deviceID, resName := range allocated {
+		if gpuID, _, ok := d.resolveGPU(deviceID, resName); ok {
+			inUse[gpuID] = struct{}{}
+		}
+	}
+	marks := make(map[string]string, len(addedDevices))
 	for deviceID, resName := range addedDevices {
-		for _, detector := range d.vendorDetectors {
-			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
-				usedBySystem, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
-				klog.V(4).Infof(
-					"Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s",
-					deviceID,
-					resName,
-					usedBySystem,
-					realDeviceID,
-				)
-				if err := d.patchGPUResource(realDeviceID, usedBySystem); err != nil {
-					klog.Errorf("Failed to patch GPU resource for added device %s: %v", deviceID, err)
-					hasError = true
-				}
-			}
+		if gpuID, usedBySystem, ok := d.resolveGPU(deviceID, resName); ok {
+			marks[gpuID] = usedBySystem
+		}
+	}
+	releases := make(map[string]struct{}, len(removedDevices))
+	for deviceID, resName := range removedDevices {
+		gpuID, _, ok := d.resolveGPU(deviceID, resName)
+		if !ok {
+			continue
+		}
+		if _, used := inUse[gpuID]; !used {
+			releases[gpuID] = struct{}{}
 		}
 	}
 
-	// Process removed devices
-	for deviceID, resName := range removedDevices {
-		for _, detector := range d.vendorDetectors {
-			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
-				// Normalize device ID the same way as the add path so that
-				// 3rd-party device plugins (e.g. HAMI) whose IDs differ from
-				// the real GPU UUID can be correctly matched back.
-				_, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
-				klog.V(4).Infof(
-					"Device plugin allocated container removed: %s "+
-						"(realDeviceID: %s), resource: %s, "+
-						"patching usedBy field to tensor fusion",
-					deviceID,
-					realDeviceID,
-					resName,
-				)
-				if err := d.patchGPUResource(realDeviceID, string(tfv1.UsedByTensorFusion)); err != nil {
-					klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
-					hasError = true
-				}
-			}
+	hasError := false
+	for gpuID, usedBySystem := range marks {
+		klog.V(4).Infof("GPU %s is allocated by an external device plugin, patching usedBy: %s", gpuID, usedBySystem)
+		if err := d.patchGPUResource(gpuID, usedBySystem); err != nil {
+			klog.Errorf("Failed to patch GPU resource %s with usedBy %s: %v", gpuID, usedBySystem, err)
+			hasError = true
+		}
+	}
+	for gpuID := range releases {
+		klog.V(4).Infof("GPU %s is no longer allocated by an external device plugin, patching usedBy to tensor fusion", gpuID)
+		if err := d.patchGPUResource(gpuID, string(tfv1.UsedByTensorFusion)); err != nil {
+			klog.Errorf("Failed to patch GPU resource %s usedBy field to tensor fusion: %v", gpuID, err)
+			hasError = true
 		}
 	}
 
@@ -405,15 +405,22 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	return nil
 }
 
-// hasResourceNamePrefix returns true if resName matches or starts with any of the prefixes.
-// This handles cases like nvidia.com/mig-1g.5gb matching prefix nvidia.com/mig.
-func hasResourceNamePrefix(prefixes []string, resName string) bool {
-	for _, prefix := range prefixes {
-		if resName == prefix || strings.HasPrefix(resName, prefix) {
-			return true
+// resolveGPU maps a device kubelet knows to the GPU resource it stands for and
+// the system that allocates it. ok is false for a resource no detector handles.
+// When several registered prefixes match, the longest one decides.
+func (d *DevicePluginDetector) resolveGPU(deviceID, resName string) (gpuID, usedBySystem string, ok bool) {
+	var matched VendorDetector
+	longest := -1
+	for prefix, detector := range d.vendorDetectors {
+		if strings.HasPrefix(resName, prefix) && len(prefix) > longest {
+			matched, longest = detector, len(prefix)
 		}
 	}
-	return false
+	if matched == nil {
+		return "", "", false
+	}
+	usedBySystem, gpuID = matched.GetUsedBySystemAndRealDeviceID(deviceID, resName)
+	return gpuID, usedBySystem, true
 }
 
 // patchGPUResource patches a GPU resource with the specified usedBy value
@@ -423,6 +430,12 @@ func (d *DevicePluginDetector) patchGPUResource(deviceID, usedBySystem string) e
 	for i := range maxRetries {
 		// Get current GPU resource
 		gpu, err := d.apiClient.GetGPU(deviceID)
+		if apierrors.IsNotFound(err) {
+			// A device TensorFusion does not manage (a MIG instance, a GPU
+			// outside every pool): there is nothing to mark or to return.
+			klog.V(4).Infof("GPU resource %s not found, skipping usedBy: %s", deviceID, usedBySystem)
+			return nil
+		}
 		if err != nil {
 			if i < maxRetries-1 {
 				backoff := time.Duration(200*(1<<i)) * time.Millisecond

@@ -25,7 +25,7 @@ var (
 type allocatorSyncState struct {
 	mu sync.Mutex
 	// waiting maps a GPU name to the pods to activate once the allocator's
-	// store shows that GPU Running. One goroutine serves each entry.
+	// store shows that GPU usable. One goroutine serves each entry.
 	waiting map[string]map[string]*v1.Pod
 	// lastSynced is the GPU event (name and resource version) the store was
 	// last found up to date with, so one event is compared with the store once
@@ -35,20 +35,21 @@ type allocatorSyncState struct {
 	activate func(pods map[string]*v1.Pod)
 }
 
-// wakeAfterAllocatorSync makes sure a pod that was woken because a GPU turned
-// Running gets a scheduling attempt that can see that GPU.
+// wakeAfterAllocatorSync makes sure a pod that was woken because a GPU became
+// usable (turned Running, or was handed back by an external device plugin)
+// gets a scheduling attempt that can see that GPU.
 //
 // The queueing hint is driven by the scheduler's own informer, while PreFilter
 // reads the allocator's store, which a different informer feeds. Nothing
 // orders the two. When the hint is delivered first, the pod is retried
-// against a store that still holds the GPU in its previous phase, is rejected
+// against a store that still holds the GPU in its previous state, is rejected
 // again, and no later event brings it back: it then waits for the periodic
 // flush of the unschedulable queue (5 minutes by default), while the node that
 // was added for it sits empty.
 //
 // The store is compared with the event here, before the hint returns, because
 // the retry can only start afterwards. If the store is behind, one goroutine
-// per GPU waits until it shows the GPU Running and then activates the pods
+// per GPU waits until it shows the GPU usable and then activates the pods
 // woken for it.
 func (s *GPUFit) wakeAfterAllocatorSync(pod *v1.Pod, gpu *tfv1.GPU) {
 	nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
@@ -67,7 +68,7 @@ func (s *GPUFit) wakeAfterAllocatorSync(pod *v1.Pod, gpu *tfv1.GPU) {
 	if gpu.ResourceVersion != "" && state.lastSynced == event {
 		return
 	}
-	if s.allocatorHasRunningGPU(gpu.Name, nodeName) {
+	if s.allocatorHasUsableGPU(gpu.Name, nodeName) {
 		state.lastSynced = event
 		return
 	}
@@ -94,21 +95,21 @@ func (s *GPUFit) activateAfterAllocatorSync(gpuName, nodeName string) {
 		if delay < maxDelay {
 			delay *= 2
 		}
-		synced = s.allocatorHasRunningGPU(gpuName, nodeName)
+		synced = s.allocatorHasUsableGPU(gpuName, nodeName)
 	}
 
 	// Pods are taken only after the store was seen up to date: a pod that
 	// joins later is handled by its own comparison in wakeAfterAllocatorSync.
 	pods := s.takeAllocatorSyncWaiters(gpuName)
 	if !synced {
-		// The GPU left the Running phase again, or the allocator's informer
+		// The GPU stopped being usable again, or the allocator's informer
 		// is not delivering. The pods stay where they are and are retried by
 		// the next GPU event or the periodic flush.
-		s.logger.Info("allocator store did not show the GPU Running in time, not activating pods",
+		s.logger.Info("allocator store did not show the GPU usable in time, not activating pods",
 			"gpu", gpuName, "node", nodeName, "pods", len(pods), "waited", timeout)
 		return
 	}
-	s.logger.Info("allocator store caught up with GPU Running, activating pods woken for it",
+	s.logger.Info("allocator store caught up with the usable GPU, activating pods woken for it",
 		"gpu", gpuName, "node", nodeName, "pods", len(pods))
 	if s.allocatorSync.activate != nil {
 		s.allocatorSync.activate(pods)
@@ -136,12 +137,11 @@ func (s *GPUFit) takeAllocatorSyncWaiters(gpuName string) map[string]*v1.Pod {
 	return pods
 }
 
-// allocatorHasRunningGPU reports whether the store PreFilter reads holds the
-// GPU in the Running phase. The store applies GPU events in order, so a GPU
-// that is Running there also carries the capacity published before.
-func (s *GPUFit) allocatorHasRunningGPU(gpuName, nodeName string) bool {
-	gpu := s.allocator.GetNodeGpuStore()[nodeName][gpuName]
-	return gpu != nil && gpu.Status.Phase == tfv1.TensorFusionGPUPhaseRunning
+// allocatorHasUsableGPU reports whether the store PreFilter reads holds the
+// GPU as usable by TensorFusion. The store applies GPU events in order, so a
+// GPU that is usable there also carries the capacity published before.
+func (s *GPUFit) allocatorHasUsableGPU(gpuName, nodeName string) bool {
+	return gpuUsableByTensorFusion(s.allocator.GetNodeGpuStore()[nodeName][gpuName])
 }
 
 // nodeQueueingHint re-queues a pod when the hypervisor's device plugins come
