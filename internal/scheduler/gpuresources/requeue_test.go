@@ -284,6 +284,67 @@ func TestPendingPodIsRetriedWhenAllocatorSeesGPURunning(t *testing.T) {
 		"a pod of another pool is not activated")
 }
 
+// A pod that is unschedulable because the pool's only GPU is allocated by an
+// external device plugin must be scheduled as soon as the allocator knows the
+// GPU was handed back. Nothing but status.usedBy changes on the GPU, and as in
+// the test above the scheduler's informer may report it first.
+func TestPendingPodIsRetriedWhenGPUIsHandedBack(t *testing.T) {
+	h := newRequeueHarness(t)
+	external := requeueTestGPU(tfv1.TensorFusionGPUPhaseRunning)
+	external.Status.UsedBy = tfv1.UsedByNvidiaDevicePlugin
+	external.ResourceVersion = "2"
+	h.allocator.UpsertGPUForTesting(h.ctx, external)
+
+	h.queue.Add(h.ctx, requeueTestPod("waiting", requeuePool))
+	h.queue.Add(h.ctx, requeueTestPod("other-pool", "pool-b"))
+	for range 2 {
+		pod, status := h.attempt(2 * time.Second)
+		require.Equal(t, fwk.Unschedulable, status.Code(), "pod %s: %s", pod.Name, status.Message())
+	}
+
+	// The scheduler hears about the hand-back first.
+	returned := requeueTestGPU(tfv1.TensorFusionGPUPhaseRunning)
+	returned.ResourceVersion = "3"
+	time.Sleep(20 * time.Millisecond) // past the backoff of the earlier attempt
+	h.queue.MoveAllToActiveOrBackoffQueue(h.logger, requeueGPUEvent, external, returned, nil)
+	require.Equal(t, []string{"other-pool"}, podNames(h.queue.UnschedulablePods()),
+		"only the pod of the GPU's pool is re-queued")
+	pod, status := h.attempt(2 * time.Second)
+	require.Equal(t, "waiting", pod.Name)
+	require.Equal(t, fwk.Unschedulable, status.Code(),
+		"the allocator's store still has the GPU with the device plugin, so this attempt cannot succeed")
+
+	// The allocator's informer delivers the same update.
+	h.allocator.UpsertGPUForTesting(h.ctx, returned)
+
+	pod, status = h.attempt(5 * time.Second)
+	require.Equal(t, "waiting", pod.Name)
+	require.True(t, status.IsSuccess(), "PreFilter after the store caught up: %s", status.Message())
+	require.Equal(t, []string{"other-pool"}, podNames(h.queue.UnschedulablePods()),
+		"a pod of another pool is not activated")
+}
+
+// A GPU that turns Running while an external device plugin still has it is
+// not usable yet, and one that is taken by a device plugin wakes nobody.
+func TestGPUNotUsableByTensorFusionWakesNobody(t *testing.T) {
+	h := newRequeueHarness(t)
+	pod := requeueTestPod("waiting", requeuePool)
+	pending := requeueTestGPU(tfv1.TensorFusionGPUPhasePending)
+	pending.Status.UsedBy = tfv1.UsedByNvidiaDevicePlugin
+	taken := requeueTestGPU(tfv1.TensorFusionGPUPhaseRunning)
+	taken.Status.UsedBy = tfv1.UsedByNvidiaDevicePlugin
+	free := requeueTestGPU(tfv1.TensorFusionGPUPhaseRunning)
+
+	for name, update := range map[string][2]*tfv1.GPU{
+		"turns Running while taken": {pending, taken},
+		"taken by a device plugin":  {free, taken},
+	} {
+		hint, err := h.plugin.queueingHint(h.logger, pod, update[0], update[1])
+		require.NoError(t, err, name)
+		require.Equal(t, fwk.QueueSkip, hint, name)
+	}
+}
+
 // When the allocator's store already shows the GPU Running, the retry the hint
 // causes is enough and nothing is kept waiting.
 func TestGPURunningHintDoesNotWaitWhenAllocatorIsCurrent(t *testing.T) {
