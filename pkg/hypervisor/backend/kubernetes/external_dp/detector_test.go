@@ -367,8 +367,10 @@ var _ = Describe("DevicePluginDetector", func() {
 			defer func() { _ = os.Remove(tmpFile.Name()) }()
 			_, err = tmpFile.WriteString(`{"Data": {"PodDeviceEntries": [
 				{"PodUID": "p", "ContainerName": "c", "ResourceName": "nvidia.com/gpu", "DeviceIDs": {"0": ["` + uuid + `"]}},
-				{"PodUID": "q", "ContainerName": "c", "ResourceName": "nvidia.com/mig-1g.5gb", "DeviceIDs": {"0": ["MIG-allocated"]}}],
-				"RegisteredDevices": {"nvidia.com/gpu": ["` + uuid + `"], "nvidia.com/mig-1g.5gb": ["MIG-allocated", "MIG-free"]}}}`)
+				{"PodUID": "q", "ContainerName": "c", "ResourceName": "nvidia.com/mig-1g.5gb",
+					"DeviceIDs": {"0": ["MIG-allocated"]}}],
+				"RegisteredDevices": {"nvidia.com/gpu": ["` + uuid + `"],
+					"nvidia.com/mig-1g.5gb": ["MIG-allocated", "MIG-free"]}}}`)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tmpFile.Close()).To(Succeed())
 
